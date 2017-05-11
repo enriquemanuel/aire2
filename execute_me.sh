@@ -4,11 +4,13 @@ ACTION=$1
 CLIENT_ID=$2
 S3_CURRENT_LOCATION=$3
 CAPTAIN_JOB=$4
+FEED_FILE_SET=$5 #boolean flag
+RENAME_SET=$6 #boolean flag
 
 # run as root
 if [ "$EUID" -ne 0 ]; then
   echo "Please run as root";
-  exit
+  exit 1
 fi
 
 # create work dir
@@ -19,12 +21,21 @@ mkdir -p ${WORK_LOCATION}
 ACTIVITY_LOG="${WORK_LOCATION}/${CLIENT_ID}_${ACTION}.log"
 FAILED_LOG="${WORK_LOCATION}/${CLIENT_ID}_${ACTION}_faled.log"
 IN_PROGRESS_FLAG_FILE="${WORK_LOCATION}/in_progress.txt"
+FEED_FILE=${WORK_LOCATION}/feed.txt
 DATE=`date +%Y-%m-%d_%H-%M-%S`
 
 # create the .zip files location
 WORK_LOCATION_FILES=${WORK_LOCATION}/files
 mkdir -p ${WORK_LOCATION_FILES}
 chown bbuser:bbuser ${WORK_LOCATION_FILES}
+
+WORK_LOCATION_FILES_BAD=${WORK_LOCATION}/files_bad
+mkdir -p ${WORK_LOCATION_FILES_BAD}
+chown bbuser:bbuser ${WORK_LOCATION_FILES_BAD}
+
+WORK_LOCATION_FILES_DUPLICATE=${WORK_LOCATION}/files_duplicate
+mkdir -p ${WORK_LOCATION_FILES_DUPLICATE}
+chown bbuser:bbuser ${WORK_LOCATION_FILES_DUPLICATE}
 
 ## S3 Variables
 S3_ROOT_DIR="s3://learn-content-store/${CLIENTID}/${ACTION}/${CAPTAIN_JOB}"
@@ -35,7 +46,10 @@ S3_IN_PROGRESS_FILE="${S3_ROOT_DIR}/in_progress.txt"
 S3_ACTIVITY_LOG="${WORK_LOCATION}/S3_${CLIENT_ID}_${ACTION}.log"
 
 # download the in progress flag to know where i am and if its a course
-aws s3 cp $S3_IN_PROGRESS_FILE $IN_PROGRESS_FLAG >> ${S3_ACTIVITY_LOG}
+aws s3 cp $S3_IN_PROGRESS_FILE $IN_PROGRESS_FLAG >> ${S3_ACTIVITY_LOG} 2>/dev/null
+if [[ "$FEED_FILE_SET" == "yes" ]]; then
+  aws s3 cp $S3_FEED $FEED_FILE >> ${S3_ACTIVITY_LOG} 2>/dev/null
+fi
 
 # function in case it gets exited (stopped) for whatever reason
 function trap2exit (){
@@ -61,8 +75,8 @@ sudo apt-get install -y inotify-tools dos2unix jq
 
 # modify the heap for the archive process to have 12G
 # if the instance is bigger, this can be customizable
-if [ "$(grep -c '$OPTS -Xmx12g'   /usr/local/blackboard/apps/content-exchange/bin/batch_ImportExport.sh)" -eq 0 ]; then
-  sed -i '/OPTS=""/a OPTS="$OPTS -Xmx12g"' /usr/local/blackboard/apps/content-exchange/bin/batch_ImportExport.sh
+if [ "$(grep -c '$OPTS -Xmx13g'   /usr/local/blackboard/apps/content-exchange/bin/batch_ImportExport.sh)" -eq 0 ]; then
+  sed -i '/OPTS=""/a OPTS="$OPTS -Xmx13g"' /usr/local/blackboard/apps/content-exchange/bin/batch_ImportExport.sh
 fi
 
 
@@ -82,7 +96,6 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
         required_size=100
       else
         required_size=$((100 + $files_size_count_rounded))
-
       fi
     elif [[ "$files_size_type" == "MiB" ]]; then
       required_size=100
@@ -113,37 +126,81 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
 
   # CHECK FOR DUPLICATES AND BROKEN FILES
   if [[ $in_progress_flag -eq 2 ]]; then
-    # test them / check for:
-    echo "Looking for broken or corrupted .zip files..."
+
     BROKEN_FILES="${WORK_LOCATION}/${CLIENT_ID}_${ACTION}_broken_files.txt"
     COURSE_IDS="${WORK_LOCATION}/${CLIENT_ID}_${ACTION}_course_ids.txt"
     DUPLICATES="${WORK_LOCATION}/${CLIEN_TID}_${ACTION}_duplicate_files.txt"
 
-    # courses that come from other LMS get "imported not restore"
-    # only courses coming from Bb have the .bb-package-info
-    ## bad zip files
-    for i in `ls $WORK_LOCATION_FILES/*.zip`; do
-      unzip -t $i &> /dev/null
-      if [ $? -ne 0 ] ; then
-        echo "Course $i is broken..."
-        echo "$i BROKEN" >> $BROKEN_FILES
-      else
-        if [[ "$file" =~ "ArchiveFile" || "$file" =~ "ExportFile" ]]; then
-          unzip -c $i .bb-package-info | grep cx.config.course.id | awk -F= -v var=$WORK_LOCATION_FILES/$i '{print $2",",var}' >> $COURSE_IDS
-        # if it doesnt come from Bb the course id is just the name of the zip file
+    # if no feed file was provided
+    if [[ $FEED_FILE_SET == "no" ]]; then
+      # test them / check for:
+      echo "Looking for broken or corrupted .zip files..."
+
+      # courses that come from other LMS get "imported not restore"
+      # only courses coming from Bb have the .bb-package-info
+      ## bad zip files
+      for i in `ls $WORK_LOCATION_FILES/*.zip`; do
+        unzip -t $i &> /dev/null
+        if [ $? -ne 0 ] ; then
+          echo "Course $i is broken..."
+          echo "$i" >> $BROKEN_FILES
+          mv $WORK_LOCATION_FILES/$i $WORK_LOCATION_FILES_BAD/$i
         else
-          echo $i | awk -v var=$WORK_LOCATION_FILES/$i -F'.zip' '{print $2",",var}' >> $COURSE_IDS
+          if [[ "$RENAME" == "no" ]]; then
+            if [[ "$file" =~ "ArchiveFile" || "$file" =~ "ExportFile" ]]; then
+              unzip -c $i .bb-package-info | grep cx.config.course.id | awk -F= -v var=$WORK_LOCATION_FILES/$i '{print $2",",var}' >> $COURSE_IDS
+              # if it doesnt come from Bb the course id is just the name of the zip file
+            else
+              echo $i | awk -v var=$WORK_LOCATION_FILES/$i -F'.zip' '{print $2",",var}' >> $COURSE_IDS
+            fi
+          elif [[ "$RENAME" == "yes" ]]; then
+            if [[ "$file" =~ "ArchiveFile" || "$file" =~ "ExportFile" ]]; then
+              unzip -c $i .bb-package-info | grep cx.config.course.id | awk -F= -v var=$WORK_LOCATION_FILES/$i '{print $2"_recover,",var}' >> $COURSE_IDS
+              # if it doesnt come from Bb the course id is just the name of the zip file
+            else
+              echo $i | awk -v var=$WORK_LOCATION_FILES/$i -F'.zip' '{print $2"recover,",var}' >> $COURSE_IDS
+            fi
+
+          fi
         fi
-      fi
-    done
+      done
 
-    ## duplicates
-    echo "Looking for duplicate files..."
-    for i in `cat $COURSE_IDS | awk '{print $2}' | sort | uniq -d`; do
-      grep $i $COURSE_IDS
-    done > $DUPLICATES
+      ## duplicates
+      echo "Looking for duplicate files..."
+      for i in `cat $COURSE_IDS | awk '{print $2}' | sort | uniq -d`; do
+        grep $i $COURSE_IDS
+      done > $DUPLICATES
 
-    echo 3 > $IN_PROGRESS_FLAG_FILE
+      echo 3 > $IN_PROGRESS_FLAG_FILE
+
+
+    # user provided feed file
+    elif [[ $FEED_FILE_SET == "yes" ]]; then
+      # only test files specified in the feed file
+      for course_id in `cat $FEED_FILE`; do
+        file=`ls $WORK_LOCATION_FILES/ | grep $course_id | head -n1`
+        unzip -t $WORK_LOCATION_FILES/$file &> /dev/null
+        if [ $? -ne 0 ] ; then
+          echo "Course $course_id is broken..."
+          echo "$course_id" >> $BROKEN_FILES
+        else
+          if [[ "$file" =~ "ArchiveFile" || "$file" =~ "ExportFile" ]]; then
+            unzip -c $WORK_LOCATION_FILES/$file .bb-package-info | grep cx.config.course.id | awk -F= -v var=$WORK_LOCATION_FILES/$file '{print $2",",var}' >> $COURSE_IDS
+            # if it doesnt come from Bb the course id is just the name of the zip file
+          else
+            echo $i | awk -v var=$WORK_LOCATION_FILES/$file -F'.zip' '{print $2",",var}' >> $COURSE_IDS
+          fi
+
+        fi
+      done
+
+      echo "Looking for duplicate files..."
+      for i in `cat $COURSE_IDS | awk '{print $2}' | sort | uniq -d`; do
+        grep $i $COURSE_IDS
+      done > $DUPLICATES
+
+      echo 3 > $IN_PROGRESS_FLAG_FILE
+    fi
   fi
 
   # CREATION OF MONITOR FILE
@@ -194,7 +251,6 @@ EOF
   if [[ $in_progress_flag -eq 4 ]]; then
     #feed format
     #course_id,/path/to/file.zip
-    FEED_FILE=${WORK_LOCATION}/feed.txt
     cat $COURSE_IDS > $FEED_FILE
     # upload feed file
     aws s3 cp $FEED_FILE $S3_FEED
