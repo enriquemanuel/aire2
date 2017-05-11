@@ -73,10 +73,9 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
     echo 0 > $IN_PROGRESS_FLAG_FILE
     # get directory size in s3
     # Bytes/MiB/KiB/GiB/TiB/PiB/EiB types
-    files_size=`aws s3 ls ${S3CURRENTLOCATION} --summarize --human-readable --profile cloudbb | tail -n1 | awk '{print $3,$4}'`
+    files_size=`aws s3 ls ${S3CURRENTLOCATION} --summarize --human-readable | tail -n1 | awk '{print $3,$4}'`
     files_size_type=`echo $files_size | awk '{print $2}'`
-    #files_size_count=`echo $files_size | awk '{print $1}'`
-    files_size_count=99.9
+    files_size_count=`echo $files_size | awk '{print $1}'`
     files_size_count_rounded=`echo "($files_size_count+0.5)/1" | bc`
     if [[ "$files_size_type" == "GiB" ]]; then
       if [ "$files_size_count_rounded" -le "100" ]; then
