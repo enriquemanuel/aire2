@@ -89,6 +89,9 @@ function trap2exit (){
   echo "\nExiting...";
   aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $region
   aws s3 cp $FEED_FILE $S3_FEED --region $region
+  for log_file in `/usr/local/blackboard/logs/content-exchange/content-exchange-log.txt*`; do
+    aws s3 cp $log_file $S3_LOG_DIR --region $region
+  done
   exit 0;
 }
 
@@ -100,9 +103,9 @@ echo "deb http://us.archive.ubuntu.com/ubuntu xenial main universe" >> /etc/apt/
 
 # update the repos and install dependencies
 echo "Installing dependencies..."
-#sudo apt-get update > /dev/null 2>&1
-#sudo apt-get install -y inotify-tools dos2unix jq > /dev/null 2>&1
-#sudo pip install pip install --upgrade --user awscli > /dev/null 2>&1
+sudo apt-get update > /dev/null 2>&1
+sudo apt-get install -y inotify-tools dos2unix jq > /dev/null 2>&1
+sudo pip install pip install --upgrade --user awscli > /dev/null 2>&1
 
 echo "Killing old monitors..."
 sudo killall inotifywait
