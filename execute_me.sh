@@ -7,6 +7,10 @@ CAPTAIN_JOB=$4
 FEED_FILE_SET=$5 #boolean flag
 RENAME_SET=$6 #boolean flag
 
+# timer
+script_start_time=`date +%s`
+
+
 # run as root
 if [ "$EUID" -ne 0 ]; then
   echo "Please run as root";
@@ -92,6 +96,8 @@ function trap2exit (){
   for log_file in `/usr/local/blackboard/logs/content-exchange/content-exchange-log.txt*`; do
     aws s3 cp $log_file $S3_LOG_DIR --region $region
   done
+  end_time=`date +%s`
+  echo "    script took `expr $end_time - $start_time` s."
   exit 0;
 }
 
@@ -370,8 +376,10 @@ EOF
 
 
    # command to execute
+   start_time=`date +%s`
    sudo -u bbuser /usr/local/blackboard/apps/content-exchange/bin/batch_ImportExport.sh -f ${FEED_FILE} -l 1 -t ${ACTION} > ${WORK_LOCATION}/batch_${CLIENT_ID}.log
-
+   end_time=`date +%s`
+   echo "    Execution took `expr $end_time - $start_time` s."
 
 
 
@@ -379,3 +387,6 @@ elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
   # need to increase the volume mounted to the required space
   echo $ACTION
 fi
+
+end_time=`date +%s`
+echo "    script took `expr $end_time - $start_time` s."
