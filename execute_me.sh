@@ -35,7 +35,7 @@ S3_IN_PROGRESS_FILE="${S3_ROOT_DIR}/in_progress.txt"
 S3_ACTIVITY_LOG="${WORK_LOCATION}/S3_${CLIENT_ID}_${ACTION}.log"
 
 
-aws s3 cp $S3_IN_PROGRESS_FILE $IN_PROGRESS_FLAG_FILE
+aws s3 cp $S3_IN_PROGRESS_FILE $IN_PROGRESS_FLAG_FILE > /dev/null 2>&1
 # was there a in progress file?
 if [ $? -eq 0 ]; then
   # if yes, lets check for the working dir if its there
@@ -61,10 +61,18 @@ if [ $? -eq 0 ]; then
       if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
         # no need to resize the env since it prob alraedy did that, so lets pin it to step 1 to resync all files
         echo 1 > $IN_PROGRESS_FLAG_FILE
-      fi
-    fi
+      fi # finish action
+    fi # finish in progress flag regular expression
+  fi # finish the work location
+else
+  if [ -d $WORK_LOCATION ]; then
+    # if yes, lets get the value from the in progress file
+    in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
+  else
+    mkdir -p ${WORK_LOCATION}
+    echo 0 > $IN_PROGRESS_FLAG_FILE
   fi
-
+fi # finish task
 
 # create the .zip files location
 WORK_LOCATION_FILES=${WORK_LOCATION}/files
@@ -93,7 +101,7 @@ function trap2exit (){
   echo "\nExiting...";
   aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $region
   aws s3 cp $FEED_FILE $S3_FEED --region $region
-  for log_file in `/usr/local/blackboard/logs/content-exchange/content-exchange-log.txt*`; do
+  for log_file in `ls /usr/local/blackboard/logs/content-exchange/content-exchange-log.txt*`; do
     aws s3 cp $log_file $S3_LOG_DIR --region $region
   done
   end_time=`date +%s`
@@ -305,6 +313,8 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
     S3_ROOT_DIR=$4
     REGION=$5
     COUNTER=0
+    WORK_COUNTER_INT=0
+    WORK_COUNTER_TOTAL=`wc -l $WORK_LOCATION/feed.txt`
     IN_PROGRESS_FLAG_FILE="${WORK_LOCATION}/in_progress.txt"
     S3_IN_PROGRESS_FILE="${S3_ROOT_DIR}/in_progress.txt"
     S3_ACTIVITY_LOG="${WORK_LOCATION}/S3_${CLIENT_ID}_${ACTION}.log"
@@ -316,13 +326,14 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
 
         if [[ $COUNTER -eq 2 ]]; then
           COMPLETED_COURSE=`ls -t /usr/local/blackboard/logs/content-exchange/BatchCxCmd* | tail -n 2| grep details.txt | cut -d'_' -f3- | awk -F'_details.txt' '{print $1}'`
+          WORK_COUNTER_INT=$((WORK_COUNTER_INT+1))
+          echo "$WORK_COUNTER_INT of $WORK_COUNTER_TOTAL"
           COUNTER=1
           echo $COMPLETED_COURSE > $IN_PROGRESS_FLAG_FILE
           # upload the flag file
           aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $REGION  >> $S3_ACTIVITY_LOG
           # upload logs cause they can be deleted
           for log_file in `ls -t /usr/local/blackboard/logs/content-exchange/*${COMPLETED_COURSE}*`; do
-            echo "found $log_file and moving it"
             aws s3 mv $log_file $S3_ROOT_DIR/logs/
           done
 
@@ -346,7 +357,7 @@ EOF
     #feed format - course_id,/path/to/file.zip
     cat $COURSE_IDS > $FEED_FILE
     # upload feed file
-    echo "  Backing up the feed new feed file..."
+    echo "  Backing up the new feed file..."
     aws s3 cp $FEED_FILE $S3_FEED --region $region
 
   # check if the flag is a course
@@ -388,5 +399,5 @@ elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
   echo $ACTION
 fi
 
-end_time=`date +%s`
-echo "    script took `expr $end_time - $start_time` s."
+script_end_time=`date +%s`
+echo "    script took `expr $script_end_time - $script_start_time` s."
