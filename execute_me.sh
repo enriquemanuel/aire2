@@ -59,7 +59,8 @@ if [ $? -eq 0 ]; then
     else
       # if not, lets set it depending on the action
       if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
-        # no need to resize the env since it prob alraedy did that, so lets pin it to step 1 to resync all files
+        echo 0 > $IN_PROGRESS_FLAG_FILE
+      elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
         echo 1 > $IN_PROGRESS_FLAG_FILE
       fi # finish action
     fi # finish in progress flag regular expression
@@ -70,7 +71,11 @@ else
     in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   else
     mkdir -p ${WORK_LOCATION}
-    echo 0 > $IN_PROGRESS_FLAG_FILE
+    if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
+      echo 0 > $IN_PROGRESS_FLAG_FILE
+    elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
+      echo 1 > $IN_PROGRESS_FLAG_FILE
+    fi # finish action
   fi
 fi # finish task
 
@@ -122,7 +127,7 @@ sudo apt-get install -y inotify-tools dos2unix jq > /dev/null 2>&1
 sudo pip install pip install --upgrade --user awscli > /dev/null 2>&1
 
 echo "Killing old monitors..."
-sudo killall inotifywait
+sudo killall inotifywait > /dev/null 2>&1
 
 # modify the heap for the archive process to have 12G
 # if the instance is bigger, this can be customizable
@@ -314,7 +319,7 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
     REGION=$5
     COUNTER=0
     WORK_COUNTER_INT=0
-    WORK_COUNTER_TOTAL=`wc -l $WORK_LOCATION/feed.txt`
+    WORK_COUNTER_TOTAL=`wc -l $WORK_LOCATION/feed.txt | awk '{print $1}'`
     IN_PROGRESS_FLAG_FILE="${WORK_LOCATION}/in_progress.txt"
     S3_IN_PROGRESS_FILE="${S3_ROOT_DIR}/in_progress.txt"
     S3_ACTIVITY_LOG="${WORK_LOCATION}/S3_${CLIENT_ID}_${ACTION}.log"
@@ -327,7 +332,6 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
         if [[ $COUNTER -eq 2 ]]; then
           COMPLETED_COURSE=`ls -t /usr/local/blackboard/logs/content-exchange/BatchCxCmd* | tail -n 2| grep details.txt | cut -d'_' -f3- | awk -F'_details.txt' '{print $1}'`
           WORK_COUNTER_INT=$((WORK_COUNTER_INT+1))
-          echo "$WORK_COUNTER_INT of $WORK_COUNTER_TOTAL"
           COUNTER=1
           echo $COMPLETED_COURSE > $IN_PROGRESS_FLAG_FILE
           # upload the flag file
@@ -336,11 +340,13 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
           for log_file in `ls -t /usr/local/blackboard/logs/content-exchange/*${COMPLETED_COURSE}*`; do
             aws s3 mv $log_file $S3_ROOT_DIR/logs/
           done
+          echo "Completed: $WORK_COUNTER_INT of $WORK_COUNTER_TOTAL"
 
         fi
       fi
     done
 EOF
+
     echo "  Giving the right permissions to the monitor..."
     chmod +x ${WORK_LOCATION}/monitor_action_bb_logs.sh
     echo 4 > $IN_PROGRESS_FLAG_FILE
@@ -390,14 +396,166 @@ EOF
    start_time=`date +%s`
    sudo -u bbuser /usr/local/blackboard/apps/content-exchange/bin/batch_ImportExport.sh -f ${FEED_FILE} -l 1 -t ${ACTION} > ${WORK_LOCATION}/batch_${CLIENT_ID}.log
    end_time=`date +%s`
+   # upload log file
+   for log_file in `ls -t /usr/local/blackboard/logs/content-exchange/BatchCxCmd_*`; do
+     aws s3 mv $log_file $S3_ROOT_DIR/logs/
+   done
    echo "    Execution took `expr $end_time - $start_time` s."
 
 
 
 elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
-  # need to increase the volume mounted to the required space
-  echo $ACTION
+  echo ""
+  echo "Starting Archive/Export Process"
+
+  # we will skip step 0 = modify volume
+  # we sill start in step 1
+  # DOWNLOAD of files - in this case the feed file)
+  in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
+  if [[ $in_progress_flag -eq 1 ]] 2>/dev/null; then
+    echo "  Downloading feed file from S3..."
+    aws s3 cp $S3_FEED $FEED_FILE --region $region
+    sed  -i 's/$/,\/var\/tmp\/cloud_learn\/files\/,true,true,true/' $FEED_FILE
+    if [ $? -eq 0 ]; then
+      echo 2 > $IN_PROGRESS_FLAG_FILE
+    else
+      echo "No feed file exists in S3 and we need a Feed File to proceed. Exiting..."
+      exit 1
+    fi
+  fi
+
+  # TEST FEED FILE
+  in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
+  if [[ $in_progress_flag -eq 2 ]] 2>/dev/null; then
+    echo "  Testing feed file..."
+    columns=`awk '{print NF}' $FEED_FILE | sort -nu | tail -n 1`
+    if [[ $columns -gt 1 || $columns -eq 0 ]]; then
+      echo "Feed file can only contain one column, with the course ids. Exiting..."
+      exit 1
+    else
+      dos2unix $FEED_FILE
+      echo 3 > $IN_PROGRESS_FLAG_FILE
+    fi
+  fi
+
+  # CREATION OF MONITOR FILE
+  in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
+  if [[ $in_progress_flag -eq 3 ]] 2>/dev/null; then
+    echo "  Creating Monitor of zip creations..."
+
+    cat > ${WORK_LOCATION}/monitor_action_files.sh <<- "EOF"
+    #!/bin/bash
+    ACTION=$1
+    CLIENT_ID=$2
+    WORK_LOCATION=$3
+    S3_ROOT_DIR=$4
+    REGION=$5
+
+    S3_FILES="${S3_ROOT_DIR}/files/"
+    S3_ACTIVITY_LOG="${WORK_LOCATION}/S3_${CLIENT_ID}_${ACTION}.log"
+    COUNTER=0
+    WORK_COUNTER_INT=0
+    WORK_COUNTER_TOTAL=`wc -l $WORK_LOCATION/feed.txt | awk '{print $1}'`
+
+    inotifywait -m /var/tmp/cloud_learn/files/ -e create | while read path action file; do
+
+      COUNTER=$((COUNTER+1))
+      if [[ $COUNTER -eq 2 ]]; then
+        COMPLETED_FILE=`ls -t /var/tmp/cloud_learn/files/ |  tail -n 1`
+        aws s3 mv /var/tmp/cloud_learn/files/${COMPLETED_FILE} ${S3_FILES} --region $REGION >> $S3_ACTIVITY_LOG
+        COUNTER=1
+        WORK_COUNTER_INT=$((WORK_COUNTER_INT+1))
+        echo "Completed: $WORK_COUNTER_INT of $WORK_COUNTER_TOTAL"
+      fi
+    done
+EOF
+
+    echo "  Creating Monitor of logs creations..."
+    cat > ${WORK_LOCATION}/monitor_action_bb_logs.sh <<- "EOF"
+    #!/bin/bash
+    ACTION=$1
+    CLIENT_ID=$2
+    WORK_LOCATION=$3
+    S3_ROOT_DIR=$4
+    REGION=$5
+    COUNTER=0
+
+    IN_PROGRESS_FLAG_FILE="${WORK_LOCATION}/in_progress.txt"
+    S3_IN_PROGRESS_FILE="${S3_ROOT_DIR}/in_progress.txt"
+    S3_ACTIVITY_LOG="${WORK_LOCATION}/S3_${CLIENT_ID}_${ACTION}.log"
+
+    inotifywait -m /usr/local/blackboard/logs/content-exchange/ -e create | while read path action file; do
+
+      if [[ "$file" =~ "BatchCxCmd" && "$file" =~ "details.txt" ]]; then
+        COUNTER=$((COUNTER+1))
+
+        if [[ $COUNTER -eq 2 ]]; then
+          COMPLETED_COURSE=`ls -t /usr/local/blackboard/logs/content-exchange/BatchCxCmd* | tail -n 2| grep details.txt | cut -d'_' -f3- | awk -F'_details.txt' '{print $1}'`
+
+          COUNTER=1
+          echo $COMPLETED_COURSE > $IN_PROGRESS_FLAG_FILE
+          # upload the flag file
+          aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $REGION  >> $S3_ACTIVITY_LOG
+          # upload logs cause they can be deleted
+          for log_file in `ls -t /usr/local/blackboard/logs/content-exchange/*${COMPLETED_COURSE}*`; do
+            aws s3 mv $log_file $S3_ROOT_DIR/logs/
+          done
+
+
+        fi
+      fi
+    done
+EOF
+    echo "  Giving the right permissions to the monitors..."
+    chmod +x ${WORK_LOCATION}/monitor_action_bb_logs.sh
+    chmod +x ${WORK_LOCATION}/monitor_action_files.sh
+    echo 4 > $IN_PROGRESS_FLAG_FILE
+  fi
+
+
+  # CREATION OF FEED FILE & AND UPLOAD IT FOR BACKUP
+  in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
+  if [[ $in_progress_flag -eq 4 ]] 2>/dev/null; then
+    echo "  Uploading modified feed file..."
+    aws s3 cp $FEED_FILE $S3_FEED --region $region
+
+  elif [[ ! $in_progress_flag =~ $re  || ${#in_progress_flag} -gt 1 ]] 2>/dev/null; then
+    echo "  In Progress flag is set to a course..."
+    echo "  Downloading complete feed file that was uploaded in the previous section..."
+    aws s3 cp $S3_FEED $FEED_FILE --region $region
+    # create new feed file from that course onwards
+    echo "  Deleting all courses until the one that was in progress to retry it..."
+    sed -i '/'$in_progress_flag'/,$!d' $FEED_FILE
+    echo "  Backing up the feed new feed file..."
+    aws s3 cp $FEED_FILE $S3_FEED --region $region
+  fi
+
+
+  echo "  Executing the monitors..."
+  ${WORK_LOCATION}/monitor_action_bb_logs.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} > ${WORK_LOCATION}/${ACTION}_${CLIENT_ID}_monitor.log  &
+
+  ${WORK_LOCATION}/monitor_action_files.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} > ${WORK_LOCATION}/${ACTION}_${CLIENT_ID}_monitor.log  &
+
+  # clean the logs that will be monitored
+  echo "  Deleting any course specific log and moving the content-exchange-log to a date backup ..."
+  rm -rf /usr/local/blackboard/logs/content-exchange/BatchCxCmd_*
+  if [ -f '/usr/local/blackboard/logs/content-exchange/content-exchange-log.txt' ]; then
+    mv /usr/local/blackboard/logs/content-exchange/content-exchange-log.txt /usr/local/blackboard/logs/content-exchange/content-exchange-log-old.txt.${DATE}
+  fi
+  echo "  Executing the Archive/Export..."
+
+
+  # command to execute
+  start_time=`date +%s`
+  sudo -u bbuser /usr/local/blackboard/apps/content-exchange/bin/batch_ImportExport.sh -f ${FEED_FILE} -l 1 -t ${ACTION} > ${WORK_LOCATION}/batch_${CLIENT_ID}.log
+  end_time=`date +%s`
+  echo "    Execution took `expr $end_time - $start_time` s."
+
+
 fi
 
+
+
 script_end_time=`date +%s`
-echo "    script took `expr $script_end_time - $script_start_time` s."
+echo ""
+echo "TOTAL EXECUTION TIME: `expr $script_end_time - $script_start_time` s."
