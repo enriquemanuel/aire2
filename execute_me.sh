@@ -10,7 +10,6 @@ RENAME_SET=$6 #boolean flag
 # timer
 script_start_time=`date +%s`
 
-
 # run as root
 if [ "$EUID" -ne 0 ]; then
   echo "Please run as root";
@@ -26,6 +25,11 @@ FEED_FILE=${WORK_LOCATION}/feed.txt
 DATE=`date +%Y-%m-%d_%H-%M-%S`
 re='^[0-9]+$'
 
+## RUNTIME VARIABLES
+region=`curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | awk -F'"' '/\"region\"/ { print $4 }'`
+instance_id=`curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | awk -F'"' '/\"instanceId\"/ { print $4 }'`
+volume_id=`aws ec2 describe-instances --instance-id $instance_id --region $region | jq '.Reservations[].Instances[].BlockDeviceMappings[].Ebs.VolumeId' | tr -d '"'`
+
 ## S3 Variables
 S3_ROOT_DIR="s3://learn-content-store/${CLIENT_ID}/${ACTION}/${CAPTAIN_JOB}"
 S3_LOG_DIR="${S3_ROOT_DIR}/logs/"
@@ -34,51 +38,60 @@ S3_FEED="${S3_ROOT_DIR}/feed.txt"
 S3_IN_PROGRESS_FILE="${S3_ROOT_DIR}/in_progress.txt"
 S3_ACTIVITY_LOG="${WORK_LOCATION}/S3_${CLIENT_ID}_${ACTION}.log"
 
-
-aws s3 cp $S3_IN_PROGRESS_FILE $IN_PROGRESS_FLAG_FILE > /dev/null 2>&1
-# was there a in progress file?
-if [ $? -eq 0 ]; then
-  # if yes, lets check for the working dir if its there
-  if [ -d $WORK_LOCATION ]; then
-    # if yes, lets get the value from the in progress file
-    in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
-  else
-    # if no folder, lets...
-    # no work location exists but in progress file exists
-    mkdir -p ${WORK_LOCATION}
-    in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
-    # now lets check if the in progres flag is a course
-    if [[ ! $in_progress_flag =~ $re ]] 2>/dev/null; then
-      # if yes, we need to...
-      # need to create the need feed file and upload it
-      $FEED_FILE_SET="yes"
-      aws s3 cp $S3_FEED $FEED_FILE --region $region
-      sed -i '/'$in_progress_flag'/,$!d' $FEED_FILE
-      aws s3 mv $FEED_FILE $S3_FEED --region $region
-      echo 0 > $IN_PROGRESS_FLAG_FILE
-    else
-      # if not, lets set it depending on the action
-      if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
-        echo 0 > $IN_PROGRESS_FLAG_FILE
-      elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
-        echo 1 > $IN_PROGRESS_FLAG_FILE
-      fi # finish action
-    fi # finish in progress flag regular expression
-  fi # finish the work location
-else
-  if [ -d $WORK_LOCATION ]; then
-    # if yes, lets get the value from the in progress file
-    in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
-  else
-    mkdir -p ${WORK_LOCATION}
-    if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
-      echo 0 > $IN_PROGRESS_FLAG_FILE
-    elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
-      echo 1 > $IN_PROGRESS_FLAG_FILE
-    fi # finish action
+# Pre checks before starting the script
+if [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
+  # check if there is an in progress file
+  aws s3 cp $S3_IN_PROGRESS_FILE $IN_PROGRESS_FLAG_FILE > /dev/null 2>&1
+  if [ $? -eq 0 ]; then
+    # there is an in progress file
+    # lets check if there is a directory with contents
+    if [ -d $WORK_LOCATION ]; then
+      # if there is a directory
+      # lets change the feed file based on the in progress flag
+      in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
+      if [[ ! $in_progress_flag =~ $re || ${#in_progress_flag} -gt 1 ]] 2>/dev/null; then
+        # if the in progress flag is a course or not a step then
+        aws s3 cp $S3_FEED $FEED_FILE --region $region
+        sed -i '/'$in_progress_flag'/,$!d' $FEED_FILE
+        aws s3 mv $FEED_FILE $S3_FEED --region $region
+      fi
+    fi
   fi
-fi # finish task
+  # there was no in progress flag
+  # we dont care if there was a working directory lets try to move it
+  mv $WORK_LOCATION ${WORK_LOCATION}_backup 2>/dev/null
+  # then create it
+  mkdir -p $WORK_LOCATION
+  # finally set the flag accordingly.
+  echo 1 > $IN_PROGRESS_FLAG_FILE
 
+elif [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
+  # check if there is an in progress file
+  aws s3 cp $S3_IN_PROGRESS_FILE $IN_PROGRESS_FLAG_FILE > /dev/null 2>&1
+  if [ $? -eq 0 ]; then
+    # there was an in progress file
+    # lets check if there is a directory with contents
+    if [ -d $WORK_LOCATION ]; then
+      # if the folder exists
+      in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
+      if [[ ! $in_progress_flag =~ $re || ${#in_progress_flag} -gt 1 ]] 2>/dev/null; then
+        # if the flag is a course or not a step
+        aws s3 cp $S3_FEED $FEED_FILE --region $region
+        sed -i '/'$in_progress_flag'/,$!d' $FEED_FILE
+        aws s3 mv $FEED_FILE $S3_FEED --region $region
+      fi
+    fi
+  fi
+  # there was no in progress flag
+  # we dont care if there was a working directory lets try to move it
+  mv $WORK_LOCATION ${WORK_LOCATION}_backup 2>/dev/null
+  # then create it
+  mkdir -p $WORK_LOCATION
+  # finally set the flag accordingly.
+  echo 0 > $IN_PROGRESS_FLAG_FILE
+fi
+
+exit 1
 # create the .zip files location
 WORK_LOCATION_FILES=${WORK_LOCATION}/files
 mkdir -p ${WORK_LOCATION_FILES}
@@ -94,10 +107,6 @@ chown bbuser:bbuser ${WORK_LOCATION_FILES_DUPLICATE}
 
 
 
-## RUNTIME VARIABLES
-region=`curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | awk -F'"' '/\"region\"/ { print $4 }'`
-instance_id=`curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | awk -F'"' '/\"instanceId\"/ { print $4 }'`
-volume_id=`aws ec2 describe-instances --instance-id $instance_id --region $region | jq '.Reservations[].Instances[].BlockDeviceMappings[].Ebs.VolumeId' | tr -d '"'`
 
 
 # function in case it gets exited (stopped) for whatever reason
