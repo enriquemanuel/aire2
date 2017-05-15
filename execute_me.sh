@@ -33,6 +33,8 @@ volume_id=`aws ec2 describe-instances --instance-id $instance_id --region $regio
 ## S3 Variables
 S3_ROOT_DIR="s3://learn-content-store/${CLIENT_ID}/${ACTION}/${CAPTAIN_JOB}"
 S3_LOG_DIR="${S3_ROOT_DIR}/logs/"
+S3_INDIVIDUAL_LOGS="${S3_LOG_DIR}/individual/"
+S3_SUMMARY_LOGS="${S3_LOG_DIR}/summary/"
 S3_FILES="${S3_ROOT_DIR}/files/"
 S3_FEED="${S3_ROOT_DIR}/feed.txt"
 S3_IN_PROGRESS_FILE="${S3_ROOT_DIR}/in_progress.txt"
@@ -116,7 +118,7 @@ function trap2exit (){
   aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $region
   aws s3 cp $FEED_FILE $S3_FEED --region $region
   for log_file in `ls /usr/local/blackboard/logs/content-exchange/content-exchange-log.txt*`; do
-    aws s3 cp $log_file $S3_LOG_DIR --region $region
+    aws s3 cp $log_file $S3_SUMMARY_LOGS --region $region
   done
   end_time=`date +%s`
   echo "    script took `expr $end_time - $start_time` s."
@@ -332,6 +334,8 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
     IN_PROGRESS_FLAG_FILE="${WORK_LOCATION}/in_progress.txt"
     S3_IN_PROGRESS_FILE="${S3_ROOT_DIR}/in_progress.txt"
     S3_ACTIVITY_LOG="${WORK_LOCATION}/S3_${CLIENT_ID}_${ACTION}.log"
+    S3_LOG_DIR="${S3_ROOT_DIR}/logs/"
+    S3_INDIVIDUAL_LOGS="${S3_LOG_DIR}/individual/"
 
     inotifywait -m /usr/local/blackboard/logs/content-exchange/ -e create | while read path action file; do
 
@@ -347,7 +351,7 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
           aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $REGION  >> $S3_ACTIVITY_LOG
           # upload logs cause they can be deleted
           for log_file in `ls -t /usr/local/blackboard/logs/content-exchange/*${COMPLETED_COURSE}*`; do
-            aws s3 mv $log_file $S3_ROOT_DIR/logs/
+            aws s3 mv $log_file $S3_INDIVIDUAL_LOGS
           done
           echo "Completed: $WORK_COUNTER_INT of $WORK_COUNTER_TOTAL"
 
@@ -407,7 +411,7 @@ EOF
    end_time=`date +%s`
    # upload log file
    for log_file in `ls -t /usr/local/blackboard/logs/content-exchange/BatchCxCmd_*`; do
-     aws s3 mv $log_file $S3_ROOT_DIR/logs/
+     aws s3 mv $log_file $S3_INDIVIDUAL_LOGS
    done
    echo "    Execution took `expr $end_time - $start_time` s."
 
@@ -492,6 +496,8 @@ EOF
     IN_PROGRESS_FLAG_FILE="${WORK_LOCATION}/in_progress.txt"
     S3_IN_PROGRESS_FILE="${S3_ROOT_DIR}/in_progress.txt"
     S3_ACTIVITY_LOG="${WORK_LOCATION}/S3_${CLIENT_ID}_${ACTION}.log"
+    S3_LOG_DIR="${S3_ROOT_DIR}/logs/"
+    S3_INDIVIDUAL_LOGS="${S3_LOG_DIR}/individual/"
 
     inotifywait -m /usr/local/blackboard/logs/content-exchange/ -e create | while read path action file; do
 
@@ -507,7 +513,7 @@ EOF
           aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $REGION  >> $S3_ACTIVITY_LOG
           # upload logs cause they can be deleted
           for log_file in `ls -t /usr/local/blackboard/logs/content-exchange/*${COMPLETED_COURSE}*`; do
-            aws s3 mv $log_file $S3_ROOT_DIR/logs/
+            aws s3 mv $log_file $S3_INDIVIDUAL_LOGS
           done
 
 
@@ -557,13 +563,27 @@ EOF
   # command to execute
   start_time=`date +%s`
   sudo -u bbuser /usr/local/blackboard/apps/content-exchange/bin/batch_ImportExport.sh -f ${FEED_FILE} -l 1 -t ${ACTION} > ${WORK_LOCATION}/batch_${CLIENT_ID}.log
+
+  # we need to upload the last file that is not being uploaded
+  for zip_file in `/var/tmp/cloud_learn/files/`; do
+    aws s3 mv /var/tmp/cloud_learn/files/${zip_file} ${S3_FILES} --region $REGION >> $S3_ACTIVITY_LOG
+  done
+
+  # we need to upload the last logs that were not being uploaded
+  for log_file in `ls -t /usr/local/blackboard/logs/content-exchange/BatchCxCmd*`; do
+    aws s3 mv /var/tmp/cloud_learn/files/${log_file} $S3_INDIVIDUAL_LOGS --region $REGION >> $S3_ACTIVITY_LOG
+  done
+
+  # we need to upload the complete log file if this server goes down
+  for summary_logs in `ls /usr/local/blackboard/logs/content-exchange/content-exchange-log*` do
+    aws s3 cp /var/tmp/cloud_learn/files/${summary_logs} $S3_SUMMARY_LOGS --region $REGION >> $S3_ACTIVITY_LOG
+  done
+
   end_time=`date +%s`
   echo "    Execution took `expr $end_time - $start_time` s."
 
 
 fi
-
-
 
 script_end_time=`date +%s`
 echo ""
