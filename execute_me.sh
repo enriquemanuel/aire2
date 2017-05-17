@@ -146,7 +146,7 @@ mkdir -p ${WORK_LOCATION_FILES_DUPLICATE}
 chown bbuser:bbuser ${WORK_LOCATION_FILES_DUPLICATE}
 
 # move the monitor scripts
-cp *monitor*.sh ${WORK_LOCATION}/
+
 
 
 # function in case it gets exited (stopped) for whatever reason
@@ -206,6 +206,7 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
     # Bytes/MiB/KiB/GiB/TiB/PiB/EiB types
     echo "  Reading the required volume size..." >> ${ACTIVITY_LOG}
     files_size=`aws s3 ls ${S3_CURRENT_LOCATION} --summarize --human-readable --region $region | tail -n1 | awk '{print $3,$4}'`
+    echo "here"
     files_size_type=`echo $files_size | awk '{print $2}'`
     files_size_count=`echo $files_size | awk '{print $1}'`
     files_size_count_rounded=`echo "($files_size_count+0.5)/1" | bc`
@@ -386,6 +387,7 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
   # CREATION OF MONITOR FILE
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 3 ]] 2>/dev/null; then
+    cp *monitor*.sh ${WORK_LOCATION}/
     echo "  Giving the right permissions to the monitor..." >> ${ACTIVITY_LOG}
     chmod +x ${WORK_LOCATION}/restore-import_monitor_bb_logs.sh
 
@@ -444,7 +446,7 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
 
     # upload the last log file
     for log_file in `ls -t ${BB_LOG_DIR}/BatchCxCmd_*`; do
-      aws s3 mv $log_file $S3_INDIVIDUAL_LOGS --region $region >> $S3_ACTIVITY_LOG
+      aws s3 mv $log_file $S3_INDIVIDUAL_LOGS/ --region $region >> $S3_ACTIVITY_LOG
     done
 
     # we need to upload the complete log file if this server goes down
