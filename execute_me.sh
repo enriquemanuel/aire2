@@ -145,6 +145,9 @@ WORK_LOCATION_FILES_DUPLICATE=${WORK_LOCATION}/files_duplicate
 mkdir -p ${WORK_LOCATION_FILES_DUPLICATE}
 chown bbuser:bbuser ${WORK_LOCATION_FILES_DUPLICATE}
 
+# move the monitor scripts
+cp *monitor*.sh ${WORK_LOCATION}/
+
 
 # function in case it gets exited (stopped) for whatever reason
 function trap2exit (){
@@ -384,8 +387,8 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 3 ]] 2>/dev/null; then
     echo "  Giving the right permissions to the monitor..." >> ${ACTIVITY_LOG}
-    #chmod +x ${WORK_LOCATION}/aire2/restore-import_monitor_bb_logs.sh
-    chmod +x /var/tmp/aire2/restore-import_monitor_bb_logs.sh
+    chmod +x ${WORK_LOCATION}/aire2/restore-import_monitor_bb_logs.sh
+
     echo 4 > $IN_PROGRESS_FLAG_FILE
     aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $region >> $S3_ACTIVITY_LOG
   fi
@@ -410,8 +413,8 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
 
     # and we let it run in the background
     echo "  Executing the monitor..." >> ${ACTIVITY_LOG}
-    /var/tmp/aire2/restore-import_monitor_bb_logs.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} ${S3_CURRENT_LOCATION} >> ${ACTIVITY_LOG}  &
-    #${WORK_LOCATION}/restore-import_monitor_bb_logs.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} ${S3_CURRENT_LOCATION} >> ${ACTIVITY_LOG}  &
+
+    ${WORK_LOCATION}/restore-import_monitor_bb_logs.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} ${S3_CURRENT_LOCATION} >> ${ACTIVITY_LOG}  &
 
     # clean the logs that will be monitored
     echo "  Deleting any course specific log and moving the content-exchange-log to a date backup ..." >> ${ACTIVITY_LOG}
@@ -557,10 +560,9 @@ elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 3 ]] 2>/dev/null; then
     echo "  Giving the right permissions to the monitors..." >> ${ACTIVITY_LOG}
-    chmod +x /var/tmp/aire2/archive-export_monitor_bb_logs.sh
-    chmod +x /var/tmp/aire2/archive-export_monitor_zip_files.sh
-    #chmod +x ${WORK_LOCATION}/archive-export_monitor_bb_logs.sh
-    #chmod +x ${WORK_LOCATION}/archive-export_monitor_zip_files.sh
+
+    chmod +x ${WORK_LOCATION}/archive-export_monitor_bb_logs.sh
+    chmod +x ${WORK_LOCATION}/archive-export_monitor_zip_files.sh
     echo 4 > $IN_PROGRESS_FLAG_FILE
   fi
 
@@ -578,10 +580,8 @@ elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
     echo "  In Progress flag is set to a course..." >> ${ACTIVITY_LOG}
 
     echo "  Executing the monitors..." >> ${ACTIVITY_LOG}
-    /var/tmp/aire2/archive-export_monitor_bb_logs.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} >> ${ACTIVITY_LOG}
-    /var/tmp/aire2/archive-export_monitor_zip_files.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} >> ${ACTIVITY_LOG}
-    #${WORK_LOCATION}/archive-export_monitor_bb_logs.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} >> ${ACTIVITY_LOG}  & 2>/dev/null
-    #${WORK_LOCATION}/archive-export_monitor_zip_files.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} >> ${ACTIVITY_LOG}  & 2>/dev/null
+    ${WORK_LOCATION}/archive-export_monitor_bb_logs.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} >> ${ACTIVITY_LOG}  & 2>/dev/null
+    ${WORK_LOCATION}/archive-export_monitor_zip_files.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} >> ${ACTIVITY_LOG}  & 2>/dev/null
 
 
     # clean the logs that will be monitored
