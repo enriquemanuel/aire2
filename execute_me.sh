@@ -145,10 +145,6 @@ WORK_LOCATION_FILES_DUPLICATE=${WORK_LOCATION}/files_duplicate
 mkdir -p ${WORK_LOCATION_FILES_DUPLICATE}
 chown bbuser:bbuser ${WORK_LOCATION_FILES_DUPLICATE}
 
-# move the monitor scripts
-
-
-
 # function in case it gets exited (stopped) for whatever reason
 function trap2exit (){
 
@@ -205,8 +201,7 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
     # get directory size in s3
     # Bytes/MiB/KiB/GiB/TiB/PiB/EiB types
     echo "  Reading the required volume size..." >> ${ACTIVITY_LOG}
-    files_size=`aws s3 ls ${S3_CURRENT_LOCATION} --summarize --human-readable --region $region | tail -n1 | awk '{print $3,$4}'`
-    echo "here"
+    files_size=`aws s3 ls ${S3_CURRENT_LOCATION} --summarize --human-readable --region $region | tail -n1 | awk '{print $3,$4}'` > /dev/null 2>&1
     files_size_type=`echo $files_size | awk '{print $2}'`
     files_size_count=`echo $files_size | awk '{print $1}'`
     files_size_count_rounded=`echo "($files_size_count+0.5)/1" | bc`
@@ -240,7 +235,6 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
     echo 1 > $IN_PROGRESS_FLAG_FILE
     aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $region >> $S3_ACTIVITY_LOG
   fi
-
 
   # DOWNLOAD OF FILES
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
@@ -382,8 +376,6 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
     fi
   fi
 
-
-
   # CREATION OF MONITOR FILE
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 3 ]] 2>/dev/null; then
@@ -436,6 +428,7 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
     if [[ ${S3_CURRENT_LOCATION: -1} == "/" ]]; then
       S3_CURRENT_LOCATION=${S3_CURRENT_LOCATION:0:-1}
     fi
+
     aws s3 mv $S3_CURRENT_LOCATION/$file_to_move $S3_ROOT_DIR/completed/$file_to_move  --region $region --dryrun
 
     feed_line_count=`wc -l ${FEED_FILE} | awk '{print $1}'`
@@ -507,7 +500,7 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
           for fatal_course in `grep -B5 -A1 'Fatal' ${BB_LOG_DIR}/${summary_log} | grep "Executed" | awk '{print $8}' | uniq`; do
 
             echo "Course failed "$fatal_course" with log:" >> ${FAILED_LOG};
-            grep -m1 -A6 "Executed ${ACTION} for ${fatal_course}" ${summary_log} >> ${FAILED_LOG};
+            grep -m1 -A6 "Executed ${ACTION} for ${fatal_course}" ${BB_LOG_DIR}/${summary_log} >> ${FAILED_LOG};
             echo >> ${FAILED_LOG}; echo >> ${FAILED_LOG};
           done
 
@@ -564,10 +557,13 @@ elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 3 ]] 2>/dev/null; then
     echo "  Giving the right permissions to the monitors..." >> ${ACTIVITY_LOG}
+    cp *monitor*.sh ${WORK_LOCATION}/
 
     chmod +x ${WORK_LOCATION}/archive-export_monitor_bb_logs.sh
     chmod +x ${WORK_LOCATION}/archive-export_monitor_zip_files.sh
+
     echo 4 > $IN_PROGRESS_FLAG_FILE
+    aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $region >> $S3_ACTIVITY_LOG
   fi
 
   # CREATION OF FEED FILE & AND UPLOAD IT FOR BACKUP
