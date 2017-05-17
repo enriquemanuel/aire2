@@ -447,7 +447,7 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
 
     # we need to upload the complete log file if this server goes down
     for summary_log in `ls ${BB_LOG_DIR}/content-exchange-log* | awk -F'/' '{print $7}'`; do
-      aws s3 cp $summary_log $S3_SUMMARY_LOGS/ --region $region >> $S3_ACTIVITY_LOG
+      aws s3 cp ${BB_LOG_DIR}/$summary_log $S3_SUMMARY_LOGS/$summary_log-${DATE} --region $region >> $S3_ACTIVITY_LOG
     done
 
     echo 9 > $IN_PROGRESS_FLAG_FILE
