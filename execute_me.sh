@@ -538,6 +538,7 @@ elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
     fi
     columns=`awk -F',' '{print NF}' $FEED_FILE | sort -nu | tail -n 1`
     if [[ $columns -gt 1 || $columns -eq 0 ]]; then
+
       echo "Feed file can only contain one column, with the course ids. Exiting..." >> ${ACTIVITY_LOG}
       exit 1
     else
@@ -588,7 +589,7 @@ elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
     echo "  Deleting any course specific log and moving the content-exchange-log to a date backup ..." >> ${ACTIVITY_LOG}
     rm -rf /usr/local/blackboard/logs/content-exchange/BatchCxCmd_*
     if [ -f '/usr/local/blackboard/logs/content-exchange/content-exchange-log.txt' ]; then
-      mv /usr/local/blackboard/logs/content-exchange/content-exchange-log.txt /usr/local/blackboard/logs/content-exchange/content-exchange-log-old.txt.${DATE}
+      mv /usr/local/blackboard/logs/content-exchange/content-exchange-log.txt /usr/local/blackboard/logs/content-exchange/cloud-content-exchange-log-old.txt.${DATE}
     fi
     echo "  Executing the Archive/Export..." >> ${ACTIVITY_LOG}
 
@@ -599,7 +600,7 @@ elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
     feed_line_count=`wc -l ${FEED_FILE} | awk '{print $1}'`
     echo "    Completed: $feed_line_count of $feed_line_count " >> ${ACTIVITY_LOG}
     echo "  Finish Execution."
-
+    sleep 10
     end_time=`date +%s`
     echo "    ${ACTION} took `expr $end_time - $start_time` s." >> ${ACTIVITY_LOG}
 
