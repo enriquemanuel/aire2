@@ -1,0 +1,58 @@
+##################
+FAILED COURSES archive
+##################
+
+./execute.sh archive 58f7c69723192 something 5 yes no
+Script started...
+Checking if there is an in progress file...
+Completed checking... Follow the log @ /var/tmp/cloud_learn/58f7c69723192_archive.log
+  Creating Monitor of logs creations...
+  Giving the right permissions to the monitors...
+Setting up watches.
+Watches established.
+Setting up watches.
+Watches established.
+  Finish Execution.
+
+Creating required folders...
+Installing dependencies...
+Killing old monitors...
+
+Starting Archive/Export Process
+  Downloading feed file from S3...
+  Testing feed file...
+  Creating Monitor of zip creations...
+  Uploading modified feed file...
+  In Progress flag is set to a course...
+  Executing the monitors...
+  Deleting any course specific log and moving the content-exchange-log to a date backup ...
+  Executing the Archive/Export...
+    Completed: 2 of 2
+    archive took 8 s.
+  Checking for errors and fatals in the summary...
+
+Failed courses in this batch...
+
+Course failed 100.201701a with log:
+2017-05-17 12:24:20 +0000 - Executed archive for 100.201701a to /var/tmp/cloud_learn/files/
+2017-05-17 12:24:20 +0000 - Operation output:
+2017-05-17 12:24:20 +0000 - ******************************************************************************
+2017-05-17 12:24:20 +0000 - May 17, 2017 12:24:20 PM - Fatal: A fatal error that prevents processing from continuing has occurred. The reason for the error is:
+2017-05-17 12:24:20 +0000 - 	A course with the specified Course ID can not be found.
+2017-05-17 12:24:20 +0000 - 	For more information, consult the detailed log.
+2017-05-17 12:24:20 +0000 - May 17, 2017 12:24:20 PM - Fatal: java.lang.NullPointerException
+
+
+Course failed 1004.201701b with log:
+2017-05-17 12:24:20 +0000 - Executed archive for 1004.201701b to /var/tmp/cloud_learn/files/
+2017-05-17 12:24:20 +0000 - Operation output:
+2017-05-17 12:24:20 +0000 - ******************************************************************************
+2017-05-17 12:24:20 +0000 - May 17, 2017 12:24:20 PM - Fatal: A fatal error that prevents processing from continuing has occurred. The reason for the error is:
+2017-05-17 12:24:20 +0000 - 	A course with the specified Course ID can not be found.
+2017-05-17 12:24:20 +0000 - 	For more information, consult the detailed log.
+2017-05-17 12:24:20 +0000 - May 17, 2017 12:24:20 PM - Fatal: java.lang.NullPointerException
+
+
+
+
+TOTAL EXECUTION TIME: 15 s.

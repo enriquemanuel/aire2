@@ -87,7 +87,6 @@ if [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
     echo 1 > $IN_PROGRESS_FLAG_FILE
   fi
 
-cat $IN_PROGRESS_FLAG_FILE
 
 elif [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
   echo "Checking if there is an in progress file..."
@@ -307,7 +306,7 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
       aws s3 cp $S3_FEED $FEED_FILE --region $region >> ${S3_ACTIVITY_LOG}
       echo "  Client Provided feed file" >> ${ACTIVITY_LOG}
       echo "  Looking for broken or corrupted .zip files..." >> ${ACTIVITY_LOG}
-      columns=`awk '{print NF}' $FEED_FILE | sort -nu | tail -n 1`
+      columns=`awk -F',' '{print NF}' $FEED_FILE | sort -nu | tail -n 1`
 
       if [[ "$RENAME_SET" == "yes" ]]; then
         echo "  We don't accept renaming when providing a feed file." >> ${ACTIVITY_LOG}
@@ -374,7 +373,6 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
 
       fi
 
-
       echo 3 > $IN_PROGRESS_FLAG_FILE
       aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $region >> $S3_ACTIVITY_LOG
     fi
@@ -385,76 +383,15 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
   # CREATION OF MONITOR FILE
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 3 ]] 2>/dev/null; then
-    echo "  Creating Monitor file..." >> ${ACTIVITY_LOG}
-    # create monitor file
-    # The following will
-    ## Create a script to monitor the file location
-    ## Upload it to S3 as soon as the second file appears
-    ### Files don't get created until they are completed and next course gets processed
-    ## Removes the file from the location so we don't fill the space up.
-    cat > ${WORK_LOCATION}/monitor_action_bb_logs.sh <<- "EOF"
-    #!/bin/bash
-    ACTION=$1
-    CLIENT_ID=$2
-    WORK_LOCATION=$3
-    S3_ROOT_DIR=$4
-    REGION=$5
-    S3_CURRENT_LOCATION=$6
-    COUNTER=0
-    WORK_COUNTER_INT=0
-    WORK_COUNTER_TOTAL=`wc -l $WORK_LOCATION/feed.txt | awk '{print $1}'`
-    IN_PROGRESS_FLAG_FILE="${WORK_LOCATION}/in_progress.txt"
-    S3_IN_PROGRESS_FILE="${S3_ROOT_DIR}/in_progress.txt"
-    S3_ACTIVITY_LOG="${WORK_LOCATION}/S3_${CLIENT_ID}_${ACTION}.log"
-    S3_LOG_DIR="${S3_ROOT_DIR}/logs"
-    S3_INDIVIDUAL_LOGS="${S3_LOG_DIR}/individual/"
-    ACTIVITY_LOG="${WORK_LOCATION}/${CLIENT_ID}_${ACTION}.log"
-
-    inotifywait -m /usr/local/blackboard/logs/content-exchange/ -e create | while read path action file; do
-
-      if [[ "$file" =~ "BatchCxCmd" && "$file" =~ "details.txt" ]]; then
-        COUNTER=$((COUNTER+1))
-
-        if [[ $COUNTER -eq 2 ]]; then
-          COMPLETED_COURSE=`ls -t /usr/local/blackboard/logs/content-exchange/BatchCxCmd* | tail -n 2 | grep details.txt | cut -d'_' -f3- | awk -F'_details.txt' '{print $1}'`
-          WORK_COUNTER_INT=$((WORK_COUNTER_INT+1))
-          COUNTER=1
-          echo $COMPLETED_COURSE > $IN_PROGRESS_FLAG_FILE
-
-          # upload the flag file
-          aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $REGION  >> $S3_ACTIVITY_LOG
-
-          # upload logs cause they can be deleted
-          for log_file in `ls -t /usr/local/blackboard/logs/content-exchange/*${COMPLETED_COURSE}*`; do
-            aws s3 mv $log_file $S3_INDIVIDUAL_LOGS >> $S3_ACTIVITY_LOG
-          done
-
-          # move the source zip file
-          file_to_move=`grep $COMPLETED_COURSE $WORK_LOCATION/feed.txt | awk '{print $2}' | awk -F'/' '{print $6}'`
-          if [[ ${S3_CURRENT_LOCATION: -1} == "/" ]]; then
-            S3_CURRENT_LOCATION=${S3_CURRENT_LOCATION:0:-1}
-          fi
-          aws s3 mv $S3_CURRENT_LOCATION/$file_to_move $S3_ROOT_DIR/completed/$file_to_move  --region $REGION --dryrun
-
-          # display counter
-          echo "    Completed: $WORK_COUNTER_INT of $WORK_COUNTER_TOTAL"
-
-        fi
-      fi
-    done
-EOF
-
     echo "  Giving the right permissions to the monitor..." >> ${ACTIVITY_LOG}
-    chmod +x ${WORK_LOCATION}/monitor_action_bb_logs.sh
+    chmod +x ${WORK_LOCATION}/restore-import_monitor_bb_logs.sh
     echo 4 > $IN_PROGRESS_FLAG_FILE
     aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $region >> $S3_ACTIVITY_LOG
-
   fi
 
   # CREATION OF FEED FILE & AND UPLOAD IT FOR BACKUP
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 4 ]] 2>/dev/null; then
-
     echo "  Creating Feed file or modifying it based on the duplicate/validity tests..." >> ${ACTIVITY_LOG}
     #feed format - course_id,/path/to/file.zip
     cat $COURSE_IDS > $FEED_FILE
@@ -465,15 +402,14 @@ EOF
     aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $region >> $S3_ACTIVITY_LOG
   fi
 
-  # check if the flag is a course
+  # EXECUTION
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
-
   if [[ ! $in_progress_flag =~ $re || ${#in_progress_flag} -gt 1 ]] 2>/dev/null; then
     echo "  In Progress flag is set to a course..." >> ${ACTIVITY_LOG}
 
     # and we let it run in the background
     echo "  Executing the monitor..." >> ${ACTIVITY_LOG}
-    ${WORK_LOCATION}/monitor_action_bb_logs.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} ${S3_CURRENT_LOCATION} >> ${ACTIVITY_LOG}  &
+    ${WORK_LOCATION}/restore-import_monitor_bb_logs.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} ${S3_CURRENT_LOCATION} >> ${ACTIVITY_LOG}  &
 
     # clean the logs that will be monitored
     echo "  Deleting any course specific log and moving the content-exchange-log to a date backup ..." >> ${ACTIVITY_LOG}
@@ -516,7 +452,7 @@ EOF
   # summmary
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 9 ]] 2>/dev/null; then
-    echo "  Creating the summary..." >> ${ACTIVITY_LOG}
+    echo "  Checking for errors and fatals in the failed logs..." >> ${ACTIVITY_LOG}
     # SUMMARY
     # if there were files there move them to something else
     for summary_log in `ls ${BB_LOG_DIR}/content-exchange-log*`; do
@@ -540,7 +476,172 @@ EOF
 
          for fatal_course in `zgrep -B5 -A1 'Fatal' ${BB_LOG_DIR}/${summary_log} | grep "Executed" | awk '{print $8}' | uniq`; do
             echo "Course failed "$fatal_course" with log:" >> ${FAILED_LOG};
-            zgrep -m1 -A6 "Executed ${action} for ${fatal_course}" ${BB_LOG_DIR}/${summary_log} >> ${FAILED_LOG};
+            zgrep -m1 -A6 "Executed ${ACTION} for ${fatal_course}" ${BB_LOG_DIR}/${summary_log} >> ${FAILED_LOG};
+            echo >> ${FAILED_LOG}; echo >> ${FAILED_LOG};
+          done
+
+          # lets print the failed ones in the complete log
+          cat ${FAILED_LOG} >> ${ACTIVITY_LOG}
+          echo >> ${ACTIVITY_LOG}
+        fi
+      else
+
+        # check if there were any fatal
+        if [[ "$(grep -m1 -c 'Fatal' ${BB_LOG_DIR}/${summary_log})" -gt 0 ]]; then
+          # if yes then lets output to the log and find them
+          # get the failed courses.
+          echo >> ${ACTIVITY_LOG}
+          echo "Failed courses in this batch..." >>${ACTIVITY_LOG}
+          echo >> ${ACTIVITY_LOG}
+
+
+          for fatal_course in `grep -B5 -A1 'Fatal' ${BB_LOG_DIR}/${summary_log} | grep "Executed" | awk '{print $8}' | uniq`; do
+
+            echo "Course failed "$fatal_course" with log:" >> ${FAILED_LOG};
+            grep -m1 -A6 "Executed ${ACTION} for ${fatal_course}" ${summary_log} >> ${FAILED_LOG};
+            echo >> ${FAILED_LOG}; echo >> ${FAILED_LOG};
+          done
+
+          # lets print the failed ones in the complete log
+          cat ${FAILED_LOG} >> ${ACTIVITY_LOG}
+          echo >> ${ACTIVITY_LOG}
+        fi
+      fi
+
+      # we need to upload the complete log file if this server goes down
+      aws s3 cp ${BB_LOG_DIR}/${summary_log} $S3_SUMMARY_LOGS/${summary_log}-.${DATE} --region $region >> $S3_ACTIVITY_LOG
+    done
+    if [[ ! -f $FAILED_LOG ]]; then
+      echo "    There were no fatals in this execution." >> ${ACTIVITY_LOG}
+    fi
+  fi
+
+
+elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
+  echo "" >> ${ACTIVITY_LOG}
+  echo "Starting Archive/Export Process" >> ${ACTIVITY_LOG}
+
+  # we will skip step 0 = modify volume
+  # we sill start in step 1
+  # DOWNLOAD of files - in this case the feed file)
+  in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
+  if [[ $in_progress_flag -eq 1 ]] 2>/dev/null; then
+    echo "  Downloading feed file from S3..." >> ${ACTIVITY_LOG}
+    aws s3 cp $S3_FEED $FEED_FILE --region $region >> ${S3_ACTIVITY_LOG}
+    if [ $? -eq 0 ]; then
+      echo 2 > $IN_PROGRESS_FLAG_FILE
+    else
+      echo "No feed file exists in S3 and we need a Feed File to proceed. Exiting..." >> ${ACTIVITY_LOG}
+      exit 1
+    fi
+    columns=`awk -F',' '{print NF}' $FEED_FILE | sort -nu | tail -n 1`
+    if [[ $columns -gt 1 || $columns -eq 0 ]]; then
+      echo "Feed file can only contain one column, with the course ids. Exiting..." >> ${ACTIVITY_LOG}
+      exit 1
+    else
+      sed  -i 's/$/,\/var\/tmp\/cloud_learn\/files\/,true,true,true/' $FEED_FILE
+    fi
+  fi
+
+  # TEST FEED FILE
+  in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
+  if [[ $in_progress_flag -eq 2 ]] 2>/dev/null; then
+    echo "  Testing feed file..." >> ${ACTIVITY_LOG}
+      dos2unix $FEED_FILE 2>/dev/null
+      echo 3 > $IN_PROGRESS_FLAG_FILE
+  fi
+
+  # CREATION OF MONITOR FILE
+  in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
+  if [[ $in_progress_flag -eq 3 ]] 2>/dev/null; then
+    echo "  Giving the right permissions to the monitors..." >> ${ACTIVITY_LOG}
+    chmod +x ${WORK_LOCATION}/archive-export_monitor_bb_logs.sh
+    chmod +x ${WORK_LOCATION}/archive-export_monitor_zip_files.sh
+    echo 4 > $IN_PROGRESS_FLAG_FILE
+  fi
+
+  # CREATION OF FEED FILE & AND UPLOAD IT FOR BACKUP
+  in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
+  if [[ $in_progress_flag -eq 4 ]] 2>/dev/null; then
+    echo "  Uploading modified feed file..." >> ${ACTIVITY_LOG}
+    aws s3 cp $FEED_FILE $S3_FEED --region $region >> ${S3_ACTIVITY_LOG}
+    echo $ACTION > $IN_PROGRESS_FLAG_FILE
+  fi
+
+  # execution
+  in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
+  if [[ ! $in_progress_flag =~ $re  || ${#in_progress_flag} -gt 1 ]] 2>/dev/null; then
+    echo "  In Progress flag is set to a course..." >> ${ACTIVITY_LOG}
+
+    echo "  Executing the monitors..." >> ${ACTIVITY_LOG}
+    ${WORK_LOCATION}/archive-export_monitor_bb_logs.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} >> ${ACTIVITY_LOG}  & 2>/dev/null
+    ${WORK_LOCATION}/archive-export_monitor_zip_files.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} >> ${ACTIVITY_LOG}  & 2>/dev/null
+    ${WORK_LOCATION}/monitor_action_bb_logs.sh
+
+    # clean the logs that will be monitored
+    echo "  Deleting any course specific log and moving the content-exchange-log to a date backup ..." >> ${ACTIVITY_LOG}
+    rm -rf /usr/local/blackboard/logs/content-exchange/BatchCxCmd_*
+    if [ -f '/usr/local/blackboard/logs/content-exchange/content-exchange-log.txt' ]; then
+      mv /usr/local/blackboard/logs/content-exchange/content-exchange-log.txt /usr/local/blackboard/logs/content-exchange/content-exchange-log-old.txt.${DATE}
+    fi
+    echo "  Executing the Archive/Export..." >> ${ACTIVITY_LOG}
+
+    # command to execute
+    start_time=`date +%s`
+    sudo -u bbuser /usr/local/blackboard/apps/content-exchange/bin/batch_ImportExport.sh -f ${FEED_FILE} -l 1 -t ${ACTION} > ${WORK_LOCATION}/batch_${CLIENT_ID}.log
+
+    feed_line_count=`wc -l ${FEED_FILE} | awk '{print $1}'`
+    echo "    Completed: $feed_line_count of $feed_line_count " >> ${ACTIVITY_LOG}
+    echo "  Finish Execution."
+
+    end_time=`date +%s`
+    echo "    ${ACTION} took `expr $end_time - $start_time` s." >> ${ACTIVITY_LOG}
+
+    # we need to upload the last file that is not being uploaded
+    for zip_file in `ls ${WORK_LOCATION}/files/*.zip`; do
+      aws s3 mv ${zip_file} ${S3_FILES} --region $region >> $S3_ACTIVITY_LOG
+    done
+
+    # we need to upload the last logs that were not being uploaded
+    for log_file in `ls -t ${BB_LOG_DIR}/BatchCxCmd*`; do
+      aws s3 mv ${log_file} $S3_INDIVIDUAL_LOGS/ --region $region >> $S3_ACTIVITY_LOG
+    done
+
+    # upload summary logs
+    for summary_log in `ls ${BB_LOG_DIR}/content-exchange-log* | awk -F'/' '{print $7}'`; do
+      aws s3 cp ${BB_LOG_DIR}/$summary_log $S3_SUMMARY_LOGS/ --region $region >> $S3_ACTIVITY_LOG
+    done
+    echo 9 > $IN_PROGRESS_FLAG_FILE
+
+  fi
+
+  # summmary
+  in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
+  if [[ $in_progress_flag -eq 9 ]] 2>/dev/null; then
+    echo "  Checking for errors and fatals in the failed logs..." >> ${ACTIVITY_LOG}
+    # SUMMARY
+    for summary_log in `ls ${BB_LOG_DIR}/content-exchange-log*`; do
+      name=`echo $summary_log | awk -F'/' '{print $7}'`
+      mv $summary_log ${BB_LOG_DIR}/cloud_old-$name
+    done
+    # download the files that were uploaded just in case
+    aws s3 sync $S3_SUMMARY_LOGS $BB_LOG_DIR >> $S3_ACTIVITY_LOG
+
+    # then lets process all the files
+    for summary_log in `ls ${BB_LOG_DIR}/content-exchange-log* | awk -F'/' '{print $7}'`; do
+      # check the extension of file, if gz do zgrep, else do below
+      if [[ ${summary_log: -2} == "gz" ]]; then
+        # check if there were any fatal
+        if [[ "$(zgrep -m1 -c 'Fatal' ${BB_LOG_DIR}/${summary_log})" -gt 0 ]]; then
+         # if yes then lets output to the log and find them
+         # get the failed courses.
+         echo "Summary File: ${summary_log}">> ${ACTIVITY_LOG}
+         echo "Failed courses in this batch..." >>${ACTIVITY_LOG}
+         echo >> ${ACTIVITY_LOG}
+
+         for fatal_course in `zgrep -B5 -A1 'Fatal' ${BB_LOG_DIR}/${summary_log} | grep "Executed" | awk '{print $8}' | uniq`; do
+            echo "Course failed "$fatal_course" with log:" >> ${FAILED_LOG};
+            zgrep -m1 -A6 "Executed ${ACTION} for ${fatal_course}" ${BB_LOG_DIR}/${summary_log} >> ${FAILED_LOG};
             echo >> ${FAILED_LOG}; echo >> ${FAILED_LOG};
           done
 
@@ -574,21 +675,23 @@ EOF
       fi
 
       # we need to upload the complete log file if this server goes down
-      aws s3 cp ${BB_LOG_DIR}/${summary_log} $S3_SUMMARY_LOGS/${summary_log}-.${DATE} --region $region >> $S3_ACTIVITY_LOG
+      #aws s3 cp ${BB_LOG_DIR}/${summary_log} $S3_SUMMARY_LOGS/${summary_log}-.${DATE} --region $region >> $S3_ACTIVITY_LOG
     done
+
+    if [[ ! -f $FAILED_LOG ]]; then
+      echo "    There were no fatals in this execution." >> ${ACTIVITY_LOG}
+    fi
+
   fi
 
-
-
-
-
-# here goes the other portion
-
 fi
+
 
 script_end_time=`date +%s`
 echo "" >> ${ACTIVITY_LOG}
 echo "TOTAL EXECUTION TIME: `expr $script_end_time - $script_start_time` s." >> ${ACTIVITY_LOG}
 
+echo "Script completed. Please review log at @ ${ACTIVITY_LOG}"
+echo ""
 # display the log
 cat ${ACTIVITY_LOG}
