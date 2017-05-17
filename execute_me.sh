@@ -387,7 +387,7 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 3 ]] 2>/dev/null; then
     echo "  Giving the right permissions to the monitor..." >> ${ACTIVITY_LOG}
-    chmod +x ${WORK_LOCATION}/aire2/restore-import_monitor_bb_logs.sh
+    chmod +x ${WORK_LOCATION}/restore-import_monitor_bb_logs.sh
 
     echo 4 > $IN_PROGRESS_FLAG_FILE
     aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $region >> $S3_ACTIVITY_LOG
