@@ -432,7 +432,7 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
     if [[ ${S3_CURRENT_LOCATION: -1} == "/" ]]; then
       S3_CURRENT_LOCATION=${S3_CURRENT_LOCATION:0:-1}
     fi
-    aws s3 mv $S3_CURRENT_LOCATION/$file_to_move $S3_ROOT_DIR/completed/$file_to_move  --region $REGION --dryrun
+    aws s3 mv $S3_CURRENT_LOCATION/$file_to_move $S3_ROOT_DIR/completed/$file_to_move  --region $region --dryrun
 
     feed_line_count=`wc -l ${FEED_FILE} | awk '{print $1}'`
     echo "    Completed: $feed_line_count of $feed_line_count " >> ${ACTIVITY_LOG}
@@ -442,7 +442,7 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
 
     # upload the last log file
     for log_file in `ls -t ${BB_LOG_DIR}/BatchCxCmd_*`; do
-      aws s3 mv $log_file $S3_INDIVIDUAL_LOGS >> $S3_ACTIVITY_LOG
+      aws s3 mv $log_file $S3_INDIVIDUAL_LOGS --region $region >> $S3_ACTIVITY_LOG
     done
 
     # we need to upload the complete log file if this server goes down
