@@ -428,6 +428,8 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
     start_time=`date +%s`
     sudo -u bbuser /usr/local/blackboard/apps/content-exchange/bin/batch_ImportExport.sh -f ${FEED_FILE} -l 1 -t ${ACTION} > ${WORK_LOCATION}/batch_${CLIENT_ID}.log
 
+    sleep 10
+
     file_to_move=`tail -n1 ${FEED_FILE} | awk -F'/' '{print $6}'`
     if [[ ${S3_CURRENT_LOCATION: -1} == "/" ]]; then
       S3_CURRENT_LOCATION=${S3_CURRENT_LOCATION:0:-1}
