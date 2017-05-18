@@ -77,8 +77,8 @@ if [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
   fi
   # there was no in progress flag
   # we dont care if there was a working directory lets try to move it
-  mv $WORK_LOCATION ${WORK_LOCATION}_backup 2>/dev/null
-  # then create it
+  rm -rf ${WORK_LOCATION}_backup
+  mv $WORK_LOCATION ${WORK_LOCATION}_backup
   mkdir -p $WORK_LOCATION
   # finally set the flag accordingly.
   if [[ $only_summary == "yes" ]]; then
@@ -117,10 +117,8 @@ elif [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
   fi
   # there was no in progress flag
   # we dont care if there was a working directory lets try to move it
-  rm -rf ${WORK_LOCATION}_backup 2>/dev/null
-  mv $WORK_LOCATION ${WORK_LOCATION}_backup 2>/dev/null
-  # then create it
-  mkdir -p $WORK_LOCATION
+  rm -rf ${WORK_LOCATION}_backup && mv $WORK_LOCATION ${WORK_LOCATION}_backup && mkdir -p $WORK_LOCATION
+
   # finally set the flag accordingly.
   if [[ $only_summary == "yes" ]]; then
     echo 9 > $IN_PROGRESS_FLAG_FILE
@@ -175,9 +173,9 @@ fi
 
 # update the repos and install dependencies
 echo "Installing dependencies..." >> ${ACTIVITY_LOG}
-#sudo apt-get update > /dev/null 2>&1
-#sudo apt-get install -y inotify-tools dos2unix jq > /dev/null 2>&1
-#sudo pip install pip install --upgrade --user awscli > /dev/null 2>&1
+sudo apt-get update > /dev/null 2>&1
+sudo apt-get install -y inotify-tools dos2unix jq > /dev/null 2>&1
+sudo pip install pip install --upgrade --user awscli > /dev/null 2>&1
 
 echo "Killing old monitors..." >> ${ACTIVITY_LOG}
 sudo killall inotifywait > /dev/null 2>&1
