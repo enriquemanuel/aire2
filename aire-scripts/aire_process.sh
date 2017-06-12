@@ -2,10 +2,24 @@
 
 ACTION=$1
 CLIENT_ID=$2
-S3_CURRENT_LOCATION=$3
-CAPTAIN_JOB=$4
-FEED_FILE_SET=$5 #boolean flag
-RENAME_SET=$6 #boolean flag
+S3_ROOT_DIR_PARAM=$3
+CAPTAIN_JOB=`date +%s`
+FEED_FILE_SET=$4 #boolean flag
+RENAME_SET=$5 #boolean flag
+S3_CURRENT_LOCATION=$6
+AWS_PROFILE=$7		# AWS Cred
+
+echo ""
+echo "Action: $ACTION"
+echo "Client ID = $CLIENT_ID"
+echo "S3_ROOT_DIR: $S3_ROOT_DIR_PARAM"
+echo "FEED_FILE_SET: $FEED_FILE_SET"
+echo "RENAME_SET: $RENAME_SET"
+echo "S3_CURRENT_LOCATION: $S3_CURRENT_LOCATION"
+echo "AWS_PROFILE: $AWS_PROFILE"
+echo ""
+
+
 
 # timer
 script_start_time=`date +%s`
@@ -13,12 +27,18 @@ script_start_time=`date +%s`
 # SCRIPT VALIDATION CHECKS
 if [[ $EUID -ne 0 ]]; then
   echo "Please run as root";
+  echo ""
   exit 1
 fi
 
-if [[ $# -ne 6 ]]; then
-  echo "We need 6 parameters to proceed. Exiting..."
+if [[ $# -ne 7 ]]; then
+  echo "We need 7 parameters to proceed. Exiting..."
+  echo ""
   exit 1
+fi
+
+if [[ ${S3_CURRENT_LOCATION: -1} == "/" ]]; then
+  S3_CURRENT_LOCATION=${S3_CURRENT_LOCATION:0:-1}
 fi
 
 # Local variables
@@ -34,6 +54,7 @@ BROKEN_FILES="${WORK_LOCATION}/${CLIENT_ID}_${ACTION}_broken_files.txt"
 COURSE_IDS="${WORK_LOCATION}/${CLIENT_ID}_${ACTION}_course_ids.txt"
 DUPLICATES="${WORK_LOCATION}/${CLIENT_ID}_${ACTION}_duplicate_files.txt"
 
+echo ""
 echo "Script started..."
 
 ## RUNTIME VARIABLES
@@ -45,15 +66,24 @@ local_feed_file="no"
 
 
 ## S3 Variables
-S3_ROOT_DIR="s3://learn-content-store/${CLIENT_ID}/${ACTION}/${CAPTAIN_JOB}"
+S3_FEED="${S3_ROOT_DIR_PARAM}/${CLIENT_ID}/${ACTION}/feed.txt"
+S3_ROOT_DIR="${S3_ROOT_DIR_PARAM}/AIRE/${CLIENT_ID}/${ACTION}/${CAPTAIN_JOB}"
 S3_LOG_DIR="${S3_ROOT_DIR}/logs"
 S3_INDIVIDUAL_LOGS="${S3_LOG_DIR}/individual"
 S3_SUMMARY_LOGS="${S3_LOG_DIR}/summary"
 S3_FILES="${S3_ROOT_DIR}/files/"
-S3_FEED="${S3_ROOT_DIR}/feed.txt"
+files_to_download=""
+
+
+echo "Individual Logs can be found: ${S3_ROOT_DIR}/logs/individual/"
+echo "Summary Logs can be found: ${S3_ROOT_DIR}/logs/summary/"
+echo ""
+
+
 S3_IN_PROGRESS_FILE="${S3_ROOT_DIR}/in_progress.txt"
 S3_ACTIVITY_LOG="${WORK_LOCATION}/S3_${CLIENT_ID}_${ACTION}.log"
 
+echo ""
 # Pre checks before starting the script
 if [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
   # check if there is an in progress file
@@ -77,8 +107,7 @@ if [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
   fi
   # there was no in progress flag
   # we dont care if there was a working directory lets try to move it
-  rm -rf ${WORK_LOCATION}_backup
-  mv $WORK_LOCATION ${WORK_LOCATION}_backup
+  rm -rf  $WORK_LOCATION/*
   mkdir -p $WORK_LOCATION
   # finally set the flag accordingly.
   if [[ $only_summary == "yes" ]]; then
@@ -86,7 +115,6 @@ if [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
   else
     echo 1 > $IN_PROGRESS_FLAG_FILE
   fi
-
 
 elif [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
   echo "Checking if there is an in progress file..."
@@ -117,7 +145,8 @@ elif [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
   fi
   # there was no in progress flag
   # we dont care if there was a working directory lets try to move it
-  rm -rf ${WORK_LOCATION}_backup && mv $WORK_LOCATION ${WORK_LOCATION}_backup && mkdir -p $WORK_LOCATION
+  rm -rf ${WORK_LOCATION}/*
+  mkdir -p $WORK_LOCATION
 
   # finally set the flag accordingly.
   if [[ $only_summary == "yes" ]]; then
@@ -127,9 +156,9 @@ elif [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
   fi
 fi
 
-echo "Completed checking... Follow the log @ ${ACTIVITY_LOG}"
+echo "Completed checking..."
 
-echo "Creating required folders..." >> ${ACTIVITY_LOG}
+echo "Creating required folders..."
 # create the .zip files location
 WORK_LOCATION_FILES=${WORK_LOCATION}/files
 mkdir -p ${WORK_LOCATION_FILES}
@@ -146,8 +175,9 @@ chown bbuser:bbuser ${WORK_LOCATION_FILES_DUPLICATE}
 # function in case it gets exited (stopped) for whatever reason
 function trap2exit (){
 
-  echo "Something killed the script so lets save the progress..." >> ${ACTIVITY_LOG}
+  echo "Stopping all scripts..."
   aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $region >> $S3_ACTIVITY_LOG
+  aws s3 cp ${WORK_LOCATION}/batch_${CLIENT_ID}.log $S3_LOG_DIR/batch_${CLIENT_ID}.log.${DATE} --region $region >> $S3_ACTIVITY_LOG
   aws s3 cp $FEED_FILE $S3_FEED --region $region >> $S3_ACTIVITY_LOG
   for log_file in `ls ${BB_LOG_DIR}/content-exchange-log* | awk -F'/' '{print $7}'`; do
     if [[ ${log_file: -3} == "txt" ]]; then
@@ -159,25 +189,14 @@ function trap2exit (){
   aws s3 cp $S3_ACTIVITY_LOG $S3_ROOT_DIR/ --region $region >> $S3_ACTIVITY_LOG
 
   end_time=`date +%s`
-  echo "    Script took `expr $end_time - $start_time` s." >> ${ACTIVITY_LOG}
+  echo "    Script took `expr $end_time - $start_time` s."
   exit 0;
 }
 
 # trap if if we kill it
 trap trap2exit SIGHUP SIGINT SIGTERM
 
-# add jq to the ubuntu repo 16.04
-if [ "$(grep -c 'deb http://us.archive.ubuntu.com/ubuntu xenial main universe'   /etc/apt/sources.list)" -eq 0 ]; then
-  echo "deb http://us.archive.ubuntu.com/ubuntu xenial main universe" >> /etc/apt/sources.list
-fi
-
-# update the repos and install dependencies
-echo "Installing dependencies..." >> ${ACTIVITY_LOG}
-sudo apt-get update > /dev/null 2>&1
-sudo apt-get install -y inotify-tools dos2unix jq > /dev/null 2>&1
-sudo pip install pip install --upgrade --user awscli > /dev/null 2>&1
-
-echo "Killing old monitors..." >> ${ACTIVITY_LOG}
+echo "Killing old monitors..."
 sudo killall inotifywait > /dev/null 2>&1
 
 # modify the heap for the archive process to have 12G
@@ -188,8 +207,8 @@ fi
 
 
 if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
-  echo "" >> ${ACTIVITY_LOG}
-  echo "Starting Import/Restore Process" >> ${ACTIVITY_LOG}
+  echo ""
+  echo "Starting Import/Restore Process"
 
   # START OF THE PROCESS AND RESIZE OF THE VOLUME
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
@@ -198,36 +217,37 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
 
     # get directory size in s3
     # Bytes/MiB/KiB/GiB/TiB/PiB/EiB types
-    echo "  Reading the required volume size..." >> ${ACTIVITY_LOG}
-    files_size=`aws s3 ls ${S3_CURRENT_LOCATION} --summarize --human-readable --region $region | tail -n1 | awk '{print $3,$4}'` > /dev/null 2>&1
+    echo "  Reading the required volume size..."
+    files_size=`aws s3 ls "${S3_CURRENT_LOCATION}/" --summarize --human-readable --region $region | tail -n1 | awk '{print $3,$4}'` > /dev/null 2>&1
     files_size_type=`echo $files_size | awk '{print $2}'`
     files_size_count=`echo $files_size | awk '{print $1}'`
-    files_size_count_rounded=`echo "($files_size_count+0.5)/1" | bc`
-    if [[ "$files_size_type" == "GiB" ]]; then
-      if [ "$files_size_count_rounded" -le "100" ]; then
-        required_size=101
-      else
-        required_size=$((100 + $files_size_count_rounded))
-      fi
-    elif [[ "$files_size_type" == "MiB" ]]; then
-      required_size=101
-    else
-      echo "    Not accepting Tera / Penta / Exbi - Bytes at this time.. exiting" >> ${ACTIVITY_LOG}
+
+    if [[ "$files_size_count" == "0" ]] 2>/dev/null; then
+      echo "  File size is 0. Maybe wrong path? ... exiting"
+      echo ""
       exit 1
     fi
 
-    echo "  Modifying the volume size..." >> ${ACTIVITY_LOG}
+    files_size_count_rounded=`echo "($files_size_count+0.5)/1" | bc`
+
+    if [[ "$files_size_type" == "GiB" ]]; then
+      required_size=$((100 + $files_size_count_rounded))
+    elif [[ "$files_size_type" == "MiB" ]]; then
+      required_size=100
+    else
+      echo "    Not accepting Tera / Penta / Exbi - Bytes at this time.. exiting"
+      echo ""
+      exit 1
+    fi
+
     # resize volume
     if [[ "$volume_size" == "$required_size"  ]]; then
-      echo "    Volume is the required size." >> ${ACTIVITY_LOG}
+      echo "    Volume is the required size."
     else
-      aws ec2 modify-volume --volume-id $volume_id --size $required_size --region $region
-      if [ $? -ne 0 ] ; then
-        echo "    There was a problem modifying the volume. Exiting..." >> ${ACTIVITY_LOG}
-        exit 1
-      fi
-      echo "    Modification Complete"
+      echo "    Volume is not the correct size. Exiting..."
+      exit 1
     fi
+
 
     # set in progress flag
     echo 1 > $IN_PROGRESS_FLAG_FILE
@@ -237,12 +257,14 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
   # DOWNLOAD OF FILES
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 1 ]] 2>/dev/null; then
-    echo "  Downloading Files from S3..." >> ${ACTIVITY_LOG}
+
+    echo "  Downloading ${files_size} from S3..."
+
     # download files
     start_time=`date +%s`
-    aws s3 sync ${S3_CURRENT_LOCATION} ${WORK_LOCATION_FILES} --region $region >> $S3_ACTIVITY_LOG
+    aws s3 sync "${S3_CURRENT_LOCATION}" ${WORK_LOCATION_FILES} --region $region >> $S3_ACTIVITY_LOG
     end_time=`date +%s`
-    echo "    Download took `expr $end_time - $start_time` s." >> ${ACTIVITY_LOG}
+    echo "    Download took `expr $end_time - $start_time` s."
     # set in progress flag
     echo 2 > $IN_PROGRESS_FLAG_FILE
     aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $region >> $S3_ACTIVITY_LOG
@@ -255,8 +277,8 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
     # if no feed file was provided
     if [[ "$FEED_FILE_SET" == "no" ]]; then
       # test them / check for:
-      echo "  No Client Feed file, creating one from the files..." >> ${ACTIVITY_LOG}
-      echo "  Looking for broken or corrupted .zip files..." >> ${ACTIVITY_LOG}
+      echo "  No Client Feed file, creating one from the files..."
+      echo "  Looking for broken or corrupted .zip files..."
 
       # courses that come from other LMS get "imported not restore"
       # only courses coming from Bb have the .bb-package-info
@@ -264,23 +286,25 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
       for i in `ls $WORK_LOCATION_FILES/*.zip`; do
         unzip -t $i &> /dev/null
         if [ $? -ne 0 ] ; then
-          echo "    Course $i is broken..." >> ${ACTIVITY_LOG}
-          echo "$i" >> $BROKEN_FILES
-          mv $WORK_LOCATION_FILES/$i $WORK_LOCATION_FILES_BAD/$i
+          temp_file=`echo $i | awk -F'/var/tmp/cloud_learn/files/' '{print $2}'`
+          echo "    Course $temp_file is broken..."
+          echo "$temp_file" >> $BROKEN_FILES
+          mv $i $WORK_LOCATION_FILES_BAD/$temp_file
         else
           if [[ "$RENAME_SET" == "no" ]]; then
             if [[ "$i" =~ "ArchiveFile" || "$i" =~ "ExportFile" ]]; then
-              unzip -c $i .bb-package-info | grep cx.config.course.id | awk -F= -v var=$i '{print $2",",var}' >> $COURSE_IDS
+              echo $i | awk -F'.zip' '{print $1}' | awk -F'File_' -v var=$i '{print $2",", var}'>> $COURSE_IDS
               # if it doesnt come from Bb the course id is just the name of the zip file
             else
-              echo $i | awk -v var=$WORK_LOCATION_FILES/$i -F'.zip' '{print $2",",var}' >> $COURSE_IDS
+              echo $i | awk -F'/var/tmp/cloud_learn/files/' '{print $2}' |awk  -F'.zip' -v var=$i '{print $1",",var}' >> $COURSE_IDS
             fi
           elif [[ "$RENAME_SET" == "yes" ]]; then
             if [[ "$i" =~ "ArchiveFile" || "$i" =~ "ExportFile" ]]; then
-              unzip -c $i .bb-package-info | grep cx.config.course.id | awk -F= -v var="$i" '{print $2"_recover,",var}' >> $COURSE_IDS
+              echo $i | awk -F'.zip' '{print $1}' | awk -F'File_' -v var=$i '{print $2"_recover,", var}' >> $COURSE_IDS
+              #unzip -c $i .bb-package-info | grep cx.config.course.id | awk -F= -v var="$i" '{print $2"_recover,",var}' >> $COURSE_IDS
               # if it doesnt come from Bb the course id is just the name of the zip file
             else
-              echo $i | awk -v var="$i" -F'.zip' '{print $2"recover,",var}' >> $COURSE_IDS
+              echo $i | awk -F'/var/tmp/cloud_learn/files/' '{print $2}'  awk -v var="$i" -F'.zip' '{print $1"_recover,",var}' >> $COURSE_IDS
             fi
           fi
         fi
@@ -288,7 +312,11 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
 
 
       ## duplicates
-      echo "  Looking for duplicate files..." >> ${ACTIVITY_LOG}
+      if [[ ! -f $COURSE_IDS ]]; then
+        echo "    Feed file not found. Exiting execution..."
+        exit 0
+      fi
+      echo "  Looking for duplicate files..."
       for i in `cat $COURSE_IDS | awk '{print $2}' | sort | uniq -d`; do
         grep $i $COURSE_IDS
       done > $DUPLICATES
@@ -298,15 +326,18 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
 
     # user provided feed file
     elif [[ "$FEED_FILE_SET" == "yes" ]]; then
-      echo "  Downloading client provided feed file..." >> ${ACTIVITY_LOG}
+      echo "  Downloading client provided feed file..."
       aws s3 cp $S3_FEED $FEED_FILE --region $region >> ${S3_ACTIVITY_LOG}
-      echo "  Client Provided feed file" >> ${ACTIVITY_LOG}
-      echo "  Looking for broken or corrupted .zip files..." >> ${ACTIVITY_LOG}
+      echo "  Client Provided feed file"
+      echo "  Looking for broken or corrupted .zip files..."
       columns=`awk -F',' '{print NF}' $FEED_FILE | sort -nu | tail -n 1`
 
+
+
       if [[ "$RENAME_SET" == "yes" ]]; then
-        echo "  We don't accept renaming when providing a feed file." >> ${ACTIVITY_LOG}
-        echo "  Please provide a correct feed file with the names you want." >> ${ACTIVITY_LOG}
+        echo "  We don't accept renaming when providing a feed file."
+        echo "  Please provide a correct feed file with the names you want."
+        echo ""
         exit 1
       fi
 
@@ -317,7 +348,7 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
           file=`ls $WORK_LOCATION_FILES/ | grep $course_id | head -n1`
           unzip -t $WORK_LOCATION_FILES/$file &> /dev/null
           if [ $? -ne 0 ] ; then
-            echo "    Course $course_id is broken..." >> ${ACTIVITY_LOG}
+            echo "    Course $course_id is broken..."
             echo "$course_id" >> $BROKEN_FILES
           else
             if [[ "$file" =~ "ArchiveFile" || "$file" =~ "ExportFile" ]]; then
@@ -336,33 +367,41 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
         if [[ "$local_feed_file" == "yes" ]]; then
           cat $FEED_FILE > $COURSE_IDS
         elif [[ "$local_feed_file" == "no" ]]; then
-          for zip_file in `cat $FEED_FILE | awk '{print $2}'`; do
+          for zip_file in `cat $FEED_FILE | awk -F',' '{print $2}'`; do
 
             if [[ "${zip_file:0:1}" == "/" ]]; then
               # check if its a local path
               if [[ ! "${zip_file:0:26}" == "${WORK_LOCATION_FILES}" ]]; then
                 echo "  We don't accept paths in the second column of the feed file. Exiting..."
+                echo ""
                 exit 1
               fi
             elif [[ ! ${zip_file:0:1} =~ $re && ! "${zip_file:0:1}" == "/"  ]]; then
               file=`ls $WORK_LOCATION_FILES/ | grep $zip_file | head -n1`
-              diff_course_id=`grep $zip_file $FEED_FILE | awk '{print $1}'`
+              diff_course_id=`grep $zip_file $FEED_FILE | awk -F',' '{print $1}'`
               unzip -t $WORK_LOCATION_FILES/$zip_file &> /dev/null
               if [ $? -ne 0 ] ; then
-                echo "    Course $zip_file is broken..." >> ${ACTIVITY_LOG}
+                echo "    Course $zip_file is broken..."
                 echo "$zip_file" >> $BROKEN_FILES
               else
-                echo "$diff_course_id $WORK_LOCATION_FILES/$zip_file" >> $COURSE_IDS
+                echo "$diff_course_id, $WORK_LOCATION_FILES/$zip_file" >> $COURSE_IDS
               fi
             fi
           done
         # some other weird format feed file
         else
-          echo "    Incorrect feed file type..." >> ${ACTIVITY_LOG}
+          echo "    Incorrect feed file type..."
+          echo ""
           exit 1
         fi
 
-        echo "  Looking for duplicate files..." >> ${ACTIVITY_LOG}
+
+        if [[ ! -f $COURSE_IDS ]]; then
+          echo "    Feed file not found. Exiting execution..."
+          exit 1
+        fi
+
+        echo "  Looking for duplicate files..."
         for i in `cat $COURSE_IDS | awk '{print $1}' | sort | uniq -d`; do
           grep $i $COURSE_IDS
         done > $DUPLICATES
@@ -377,9 +416,14 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
   # CREATION OF MONITOR FILE
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 3 ]] 2>/dev/null; then
-    cp *monitor*.sh ${WORK_LOCATION}/
-    echo "  Giving the right permissions to the monitor..." >> ${ACTIVITY_LOG}
+    cp /var/tmp/aire/*monitor*.sh ${WORK_LOCATION}/
+    echo "  Giving the right permissions to the monitor..."
     chmod +x ${WORK_LOCATION}/restore-import_monitor_bb_logs.sh
+
+    if [[ $? -ne 0 ]]; then
+      echo "There were some errors giving the permissions to the monitors. Exiting.."
+    	exit 1
+    fi
 
     echo 4 > $IN_PROGRESS_FLAG_FILE
     aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $region >> $S3_ACTIVITY_LOG
@@ -388,11 +432,17 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
   # CREATION OF FEED FILE & AND UPLOAD IT FOR BACKUP
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 4 ]] 2>/dev/null; then
-    echo "  Creating Feed file or modifying it based on the duplicate/validity tests..." >> ${ACTIVITY_LOG}
+    echo "  Creating Feed file or modifying it based on the duplicate/validity tests..."
+    if [[ ! -f $COURSE_IDS ]]; then
+      echo "    Feed file not found. Exiting execution..."
+      exit 1
+    fi
     #feed format - course_id,/path/to/file.zip
     cat $COURSE_IDS > $FEED_FILE
+
+
     # upload feed file
-    echo "  Backing up the new feed file..." >> $ACTIVITY_LOG
+    echo "  Backing up the new feed file..."
     aws s3 cp $FEED_FILE $S3_FEED --region $region >> $S3_ACTIVITY_LOG
     echo ${ACTION} > $IN_PROGRESS_FLAG_FILE
     aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $region >> $S3_ACTIVITY_LOG
@@ -401,39 +451,52 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
   # EXECUTION
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ ! $in_progress_flag =~ $re || ${#in_progress_flag} -gt 1 ]] 2>/dev/null; then
-    echo "  In Progress flag is set to a course..." >> ${ACTIVITY_LOG}
+
+    columns=`awk -F',' '{print NF}' $FEED_FILE | sort -nu | tail -n 1`
+    if [[ $columns -lt 2 ]]; then
+      echo "    There was a problem with the feed file. Exiting..."
+      exit 1
+    fi
 
     # and we let it run in the background
-    echo "  Executing the monitor..." >> ${ACTIVITY_LOG}
+    echo "  Executing the monitor..."
 
-    ${WORK_LOCATION}/restore-import_monitor_bb_logs.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} ${S3_CURRENT_LOCATION} >> ${ACTIVITY_LOG}  &
+    ${WORK_LOCATION}/restore-import_monitor_bb_logs.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} ${S3_CURRENT_LOCATION}   &
+
+    if [[ $? -ne 0 ]]; then
+      echo "There were some errors executing the monitors. Exiting.."
+    	exit 1
+    fi
 
     # clean the logs that will be monitored
-    echo "  Deleting any course specific log and moving the content-exchange-log to a date backup ..." >> ${ACTIVITY_LOG}
+    echo "  Deleting any course specific log and moving the content-exchange-log to a date backup ..."
     rm -rf /usr/local/blackboard/logs/content-exchange/BatchCxCmd_*
     if [ -f '/usr/local/blackboard/logs/content-exchange/content-exchange-log.txt' ]; then
-      mv /usr/local/blackboard/logs/content-exchange/content-exchange-log.txt /usr/local/blackboard/logs/content-exchange/content-exchange-log-old.txt.${DATE}
+      mv /usr/local/blackboard/logs/content-exchange/content-exchange-log.txt /usr/local/blackboard/logs/content-exchange/cloud-content-exchange-log.txt.${DATE}
     fi
-    echo "  Executing the Restore/Import..." >> ${ACTIVITY_LOG}
+    echo "  Executing the Restore/Import..."
 
     # command to execute
     start_time=`date +%s`
     sudo -u bbuser /usr/local/blackboard/apps/content-exchange/bin/batch_ImportExport.sh -f ${FEED_FILE} -l 1 -t ${ACTION} > ${WORK_LOCATION}/batch_${CLIENT_ID}.log
 
-    sleep 10
+    sleep 60
 
     file_to_move=`tail -n1 ${FEED_FILE} | awk -F'/' '{print $6}'`
     if [[ ${S3_CURRENT_LOCATION: -1} == "/" ]]; then
       S3_CURRENT_LOCATION=${S3_CURRENT_LOCATION:0:-1}
     fi
 
-    aws s3 mv $S3_CURRENT_LOCATION/$file_to_move $S3_ROOT_DIR/completed/$file_to_move  --region $region --dryrun
+    aws s3 mv $S3_CURRENT_LOCATION/$file_to_move $S3_ROOT_DIR/completed/$file_to_move  --region $region >> $S3_ACTIVITY_LOG
 
+    COMPLETED_COURSE=`ls -t /usr/local/blackboard/logs/content-exchange/BatchCxCmd* | tail -n 2 | grep details.txt | cut -d'_' -f3- | awk -F'_details.txt' '{print $1}'`
     feed_line_count=`wc -l ${FEED_FILE} | awk '{print $1}'`
-    echo "    Completed: $feed_line_count of $feed_line_count " >> ${ACTIVITY_LOG}
+
+    echo "    Completed: $feed_line_count of $feed_line_count - $COMPLETED_COURSE"
+
     echo "  Finish Execution."
     end_time=`date +%s`
-    echo "    ${ACTION} took `expr $end_time - $start_time` s." >> ${ACTIVITY_LOG}
+    echo "    ${ACTION} took `expr $end_time - $start_time` s."
 
     # upload the last log file
     for log_file in `ls -t ${BB_LOG_DIR}/BatchCxCmd_*`; do
@@ -442,102 +505,64 @@ if [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
 
     # we need to upload the complete log file if this server goes down
     for summary_log in `ls ${BB_LOG_DIR}/content-exchange-log* | awk -F'/' '{print $7}'`; do
-      aws s3 cp ${BB_LOG_DIR}/$summary_log $S3_SUMMARY_LOGS/$summary_log-${DATE} --region $region >> $S3_ACTIVITY_LOG
+      aws s3 mv ${BB_LOG_DIR}/$summary_log $S3_SUMMARY_LOGS/$summary_log-${DATE} --region $region >> $S3_ACTIVITY_LOG
     done
 
+    #aws s3 mv ${WORK_LOCATION}/batch_${CLIENT_ID}.log $S3_LOG_DIR/batch_${CLIENT_ID}.log  >> $S3_ACTIVITY_LOG
     echo 9 > $IN_PROGRESS_FLAG_FILE
     aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $region >> $S3_ACTIVITY_LOG
+
   fi
 
   # summmary
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 9 ]] 2>/dev/null; then
-    echo "  Checking for errors and fatals in the failed logs..." >> ${ACTIVITY_LOG}
-    # SUMMARY
+    rm -rf ${FAILED_LOG}
+    echo "  Checking for errors and fatals in the failed logs..."
+
     # if there were files there move them to something else
-    for summary_log in `ls ${BB_LOG_DIR}/content-exchange-log*`; do
-      name=`echo $summary_log | awk -F'/' '{print $7}'`
-      mv $summary_log ${BB_LOG_DIR}/cloud_old-$name
-    done
-    # download the files that were uploaded just in case
-    aws s3 sync $S3_SUMMARY_LOGS $BB_LOG_DIR --region $region >> $S3_ACTIVITY_LOG
+    feed_line_count=`wc -l ${FEED_FILE} | awk '{print $1}'`
+    fatals_count=`grep -c 'Fatal' ${WORK_LOCATION}/batch_${CLIENT_ID}.log*`
+    if [[ $fatals_count -gt 0 ]]; then
+      echo ""
+      #echo "    There were $fatals_count errors out of $feed_line_count"
+      for fatal_course in `cat ${WORK_LOCATION}/batch_${CLIENT_ID}.log | grep -B 4 Fatal | grep "Executed" | awk '{print $4}'`; do
+        fatal_error=`grep -A4 $fatal_course ${WORK_LOCATION}/batch_${CLIENT_ID}.log | grep -A1 Fatal | grep -vE "Fatal|\--"`
+        echo "      $fatal_course - $fatal_error" > $FAILED_LOG
+        done
+    fi
 
-    # then lets process all the files
-    for summary_log in `ls ${BB_LOG_DIR}/content-exchange-log* | awk -F'/' '{print $7}'`; do
-      # check the extension of file, if gz do zgrep, else do below
-      if [[ ${summary_log: -2} == "gz" ]]; then
-        # check if there were any fatal
-        if [[ "$(zgrep -m1 -c 'Fatal' ${BB_LOG_DIR}/${summary_log})" -gt 0 ]]; then
-         # if yes then lets output to the log and find them
-         # get the failed courses.
-         echo "Summary File: ${summary_log}">> ${ACTIVITY_LOG}
-         echo "Failed courses in this batch..." >>${ACTIVITY_LOG}
-         echo >> ${ACTIVITY_LOG}
-
-         for fatal_course in `zgrep -B5 -A1 'Fatal' ${BB_LOG_DIR}/${summary_log} | grep "Executed" | awk '{print $8}' | uniq`; do
-            echo "Course failed "$fatal_course" with log:" >> ${FAILED_LOG};
-            zgrep -m1 -A6 "Executed ${ACTION} for ${fatal_course}" ${BB_LOG_DIR}/${summary_log} >> ${FAILED_LOG};
-            echo >> ${FAILED_LOG}; echo >> ${FAILED_LOG};
-          done
-
-          # lets print the failed ones in the complete log
-          cat ${FAILED_LOG} >> ${ACTIVITY_LOG}
-          echo >> ${ACTIVITY_LOG}
-        fi
-      else
-
-        # check if there were any fatal
-        if [[ "$(grep -m1 -c 'Fatal' ${BB_LOG_DIR}/${summary_log})" -gt 0 ]]; then
-          # if yes then lets output to the log and find them
-          # get the failed courses.
-          echo >> ${ACTIVITY_LOG}
-          echo "Failed courses in this batch..." >>${ACTIVITY_LOG}
-          echo >> ${ACTIVITY_LOG}
-
-
-          for fatal_course in `grep -B5 -A1 'Fatal' ${BB_LOG_DIR}/${summary_log} | grep "Executed" | awk '{print $8}' | uniq`; do
-
-            echo "Course failed "$fatal_course" with log:" >> ${FAILED_LOG};
-            grep -m1 -A6 "Executed ${ACTION} for ${fatal_course}" ${BB_LOG_DIR}/${summary_log} >> ${FAILED_LOG};
-            echo >> ${FAILED_LOG}; echo >> ${FAILED_LOG};
-          done
-
-          # lets print the failed ones in the complete log
-          cat ${FAILED_LOG} >> ${ACTIVITY_LOG}
-          echo >> ${ACTIVITY_LOG}
-        fi
-      fi
-
-      # we need to upload the complete log file if this server goes down
-      aws s3 cp ${BB_LOG_DIR}/${summary_log} $S3_SUMMARY_LOGS/${summary_log}-.${DATE} --region $region >> $S3_ACTIVITY_LOG
-    done
     if [[ ! -f $FAILED_LOG ]]; then
-      echo "    There were no fatals in this execution." >> ${ACTIVITY_LOG}
+      echo "    There were no fatals in this execution."
+    else
+      cat $FAILED_LOG
     fi
   fi
 
 
 elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
-  echo "" >> ${ACTIVITY_LOG}
-  echo "Starting Archive/Export Process" >> ${ACTIVITY_LOG}
+  echo ""
+  echo "Starting Archive/Export Process"
 
   # we will skip step 0 = modify volume
   # we sill start in step 1
   # DOWNLOAD of files - in this case the feed file)
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 1 ]] 2>/dev/null; then
-    echo "  Downloading feed file from S3..." >> ${ACTIVITY_LOG}
+    echo "  Downloading feed file from S3..."
     aws s3 cp $S3_FEED $FEED_FILE --region $region >> ${S3_ACTIVITY_LOG}
     if [ $? -eq 0 ]; then
       echo 2 > $IN_PROGRESS_FLAG_FILE
     else
-      echo "No feed file exists in S3 and we need a Feed File to proceed. Exiting..." >> ${ACTIVITY_LOG}
+      echo "No feed file exists in S3 and we need a Feed File to proceed. Exiting..."
+      echo ""
       exit 1
     fi
     columns=`awk -F',' '{print NF}' $FEED_FILE | sort -nu | tail -n 1`
-    if [[ $columns -gt 1 || $columns -eq 0 ]]; then
 
-      echo "Feed file can only contain one column, with the course ids. Exiting..." >> ${ACTIVITY_LOG}
+    if [[ $columns -gt 1 || $columns -eq 0 ]]; then
+      echo "Feed file can only contain one column, with the course ids. Exiting..."
+      echo ""
       exit 1
     else
       sed  -i 's/$/,\/var\/tmp\/cloud_learn\/files\/,true,true,true/' $FEED_FILE
@@ -547,7 +572,7 @@ elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
   # TEST FEED FILE
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 2 ]] 2>/dev/null; then
-    echo "  Testing feed file..." >> ${ACTIVITY_LOG}
+    echo "  Testing feed file..."
       dos2unix $FEED_FILE 2>/dev/null
       echo 3 > $IN_PROGRESS_FLAG_FILE
   fi
@@ -555,11 +580,16 @@ elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
   # CREATION OF MONITOR FILE
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 3 ]] 2>/dev/null; then
-    echo "  Giving the right permissions to the monitors..." >> ${ACTIVITY_LOG}
-    cp *monitor*.sh ${WORK_LOCATION}/
+    echo "  Giving the right permissions to the monitors..."
+    cp /var/tmp/aire/*monitor*.sh ${WORK_LOCATION}/
 
     chmod +x ${WORK_LOCATION}/archive-export_monitor_bb_logs.sh
     chmod +x ${WORK_LOCATION}/archive-export_monitor_zip_files.sh
+
+    if [[ $? -ne 0 ]]; then
+      echo "There were some errors giving the right permissions to the monitors. Exiting.."
+    	exit 1
+    fi
 
     echo 4 > $IN_PROGRESS_FLAG_FILE
     aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $region >> $S3_ACTIVITY_LOG
@@ -568,7 +598,7 @@ elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
   # CREATION OF FEED FILE & AND UPLOAD IT FOR BACKUP
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 4 ]] 2>/dev/null; then
-    echo "  Uploading modified feed file..." >> ${ACTIVITY_LOG}
+    echo "  Uploading modified feed file..."
     aws s3 cp $FEED_FILE $S3_FEED --region $region >> ${S3_ACTIVITY_LOG}
     echo $ACTION > $IN_PROGRESS_FLAG_FILE
   fi
@@ -576,31 +606,40 @@ elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
   # execution
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ ! $in_progress_flag =~ $re  || ${#in_progress_flag} -gt 1 ]] 2>/dev/null; then
-    echo "  In Progress flag is set to a course..." >> ${ACTIVITY_LOG}
 
-    echo "  Executing the monitors..." >> ${ACTIVITY_LOG}
-    ${WORK_LOCATION}/archive-export_monitor_bb_logs.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} >> ${ACTIVITY_LOG}  & 2>/dev/null
-    ${WORK_LOCATION}/archive-export_monitor_zip_files.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region} >> ${ACTIVITY_LOG}  & 2>/dev/null
+    echo "  Executing the monitors..."
+    ${WORK_LOCATION}/archive-export_monitor_bb_logs.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region}   & 2>/dev/null
+    ${WORK_LOCATION}/archive-export_monitor_zip_files.sh ${ACTION} ${CLIENT_ID} ${WORK_LOCATION} ${S3_ROOT_DIR} ${region}   & 2>/dev/null
+
+    if [[ $? -ne 0 ]]; then
+      echo "There were some errors executing the monitors. Exiting.."
+    	exit 1
+    fi
 
 
     # clean the logs that will be monitored
-    echo "  Deleting any course specific log and moving the content-exchange-log to a date backup ..." >> ${ACTIVITY_LOG}
+    echo "  Deleting any course specific log and moving the content-exchange-log to a date backup ..."
     rm -rf /usr/local/blackboard/logs/content-exchange/BatchCxCmd_*
     if [ -f '/usr/local/blackboard/logs/content-exchange/content-exchange-log.txt' ]; then
       mv /usr/local/blackboard/logs/content-exchange/content-exchange-log.txt /usr/local/blackboard/logs/content-exchange/cloud-content-exchange-log-old.txt.${DATE}
     fi
-    echo "  Executing the Archive/Export..." >> ${ACTIVITY_LOG}
+    echo "  Executing the Archive/Export..."
 
     # command to execute
     start_time=`date +%s`
     sudo -u bbuser /usr/local/blackboard/apps/content-exchange/bin/batch_ImportExport.sh -f ${FEED_FILE} -l 1 -t ${ACTION} > ${WORK_LOCATION}/batch_${CLIENT_ID}.log
+    sleep 60
+
+    COMPLETED_COURSE=`ls -t /usr/local/blackboard/logs/content-exchange/BatchCxCmd* | tail -n 2| grep details.txt | cut -d'_' -f3- | awk -F'_details.txt' '{print $1}'`
 
     feed_line_count=`wc -l ${FEED_FILE} | awk '{print $1}'`
-    echo "    Completed: $feed_line_count of $feed_line_count " >> ${ACTIVITY_LOG}
+    echo "    Completed: $feed_line_count of $feed_line_count - $COMPLETED_COURSE "
+    echo ""
+    echo "    Completed files will be moved to: ${S3_ROOT_DIR}/completed/"
+    echo ""
     echo "  Finish Execution."
-    sleep 10
     end_time=`date +%s`
-    echo "    ${ACTION} took `expr $end_time - $start_time` s." >> ${ACTIVITY_LOG}
+    echo "    ${ACTION} took `expr $end_time - $start_time` s."
 
     # we need to upload the last file that is not being uploaded
     for zip_file in `ls ${WORK_LOCATION}/files/*.zip`; do
@@ -614,77 +653,39 @@ elif [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
 
     # upload summary logs
     for summary_log in `ls ${BB_LOG_DIR}/content-exchange-log* | awk -F'/' '{print $7}'`; do
-      aws s3 cp ${BB_LOG_DIR}/$summary_log $S3_SUMMARY_LOGS/ --region $region >> $S3_ACTIVITY_LOG
+      aws s3 mv ${BB_LOG_DIR}/$summary_log $S3_SUMMARY_LOGS/ --region $region >> $S3_ACTIVITY_LOG
     done
+    #aws s3 mv ${WORK_LOCATION}/batch_${CLIENT_ID}.log $S3_LOG_DIR/batch_${CLIENT_ID}.log >> $S3_ACTIVITY_LOG
+
     echo 9 > $IN_PROGRESS_FLAG_FILE
+    aws s3 cp $IN_PROGRESS_FLAG_FILE $S3_IN_PROGRESS_FILE --region $region >> $S3_ACTIVITY_LOG
 
   fi
 
   # summmary
   in_progress_flag=`cat $IN_PROGRESS_FLAG_FILE`
   if [[ $in_progress_flag -eq 9 ]] 2>/dev/null; then
-    echo "  Checking for errors and fatals in the failed logs..." >> ${ACTIVITY_LOG}
-    # SUMMARY
-    for summary_log in `ls ${BB_LOG_DIR}/content-exchange-log*`; do
-      name=`echo $summary_log | awk -F'/' '{print $7}'`
-      mv $summary_log ${BB_LOG_DIR}/cloud_old-$name
-    done
-    # download the files that were uploaded just in case
-    aws s3 sync $S3_SUMMARY_LOGS $BB_LOG_DIR >> $S3_ACTIVITY_LOG
+    rm -rf ${FAILED_LOG}
+    echo "  Checking for errors and fatals in the failed logs..."
+    #for file in `aws s3 ls ${$S3_LOG_DIR}/ --region ${region} | grep batch | awk '{print $4}'`; do
+    #  aws s3 cp ${$S3_LOG_DIR}/$file ${WORK_LOCATION}/$file >> $S3_ACTIVITY_LOG
+    #done
 
-    # then lets process all the files
-    for summary_log in `ls ${BB_LOG_DIR}/content-exchange-log* | awk -F'/' '{print $7}'`; do
-      # check the extension of file, if gz do zgrep, else do below
-      if [[ ${summary_log: -2} == "gz" ]]; then
-        # check if there were any fatal
-        if [[ "$(zgrep -m1 -c 'Fatal' ${BB_LOG_DIR}/${summary_log})" -gt 0 ]]; then
-         # if yes then lets output to the log and find them
-         # get the failed courses.
-         echo "Summary File: ${summary_log}">> ${ACTIVITY_LOG}
-         echo "Failed courses in this batch..." >>${ACTIVITY_LOG}
-         echo >> ${ACTIVITY_LOG}
-
-         for fatal_course in `zgrep -B5 -A1 'Fatal' ${BB_LOG_DIR}/${summary_log} | grep "Executed" | awk '{print $8}' | uniq`; do
-            echo "Course failed "$fatal_course" with log:" >> ${FAILED_LOG};
-            zgrep -m1 -A6 "Executed ${ACTION} for ${fatal_course}" ${BB_LOG_DIR}/${summary_log} >> ${FAILED_LOG};
-            echo >> ${FAILED_LOG}; echo >> ${FAILED_LOG};
-          done
-
-          # lets print the failed ones in the complete log
-          cat ${FAILED_LOG} >> ${ACTIVITY_LOG}
-          echo >> ${ACTIVITY_LOG}
-        fi
-      else
-
-        # check if there were any fatal
-        if [[ "$(grep -m1 -c 'Fatal' ${BB_LOG_DIR}/${summary_log})" -gt 0 ]]; then
-          # if yes then lets output to the log and find them
-          # get the failed courses.
-          echo >> ${ACTIVITY_LOG}
-          echo "Failed courses in this batch..." >>${ACTIVITY_LOG}
-          echo >> ${ACTIVITY_LOG}
-
-
-          for fatal_course in `grep -B5 -A1 'Fatal' ${BB_LOG_DIR}/${summary_log} | grep "Executed" | awk '{print $8}' | uniq`; do
-            echo ${action}
-            echo $fatal_course
-            echo "Course failed "$fatal_course" with log:" >> ${FAILED_LOG};
-            grep -m1 -A6 "Executed ${ACTION} for ${fatal_course}" ${BB_LOG_DIR}/${summary_log} >> ${FAILED_LOG};
-            echo >> ${FAILED_LOG}; echo >> ${FAILED_LOG};
-          done
-
-          # lets print the failed ones in the complete log
-          cat ${FAILED_LOG} >> ${ACTIVITY_LOG}
-          echo >> ${ACTIVITY_LOG}
-        fi
-      fi
-
-      # we need to upload the complete log file if this server goes down
-      #aws s3 cp ${BB_LOG_DIR}/${summary_log} $S3_SUMMARY_LOGS/${summary_log}-.${DATE} --region $region >> $S3_ACTIVITY_LOG
-    done
+    fatals_count=`grep -c 'Fatal' ${WORK_LOCATION}/batch_${CLIENT_ID}.log*`
+    feed_line_count=`wc -l ${FEED_FILE} | awk '{print $1}'`
+    if [[ $fatals_count -gt 0 ]]; then
+      echo ""
+      #echo "    There were $fatals_count errors out of $feed_line_count"
+      for fatal_course in `cat ${WORK_LOCATION}/batch_${CLIENT_ID}.log | grep -B 4 Fatal | grep "Executed" | awk '{print $4}'`; do
+        fatal_error=`grep -A4 $fatal_course ${WORK_LOCATION}/batch_${CLIENT_ID}.log | grep -A1 Fatal | grep -vE "Fatal|\--"`
+        echo "      $fatal_course - $fatal_error" > $FAILED_LOG
+        done
+    fi
 
     if [[ ! -f $FAILED_LOG ]]; then
-      echo "    There were no fatals in this execution." >> ${ACTIVITY_LOG}
+      echo "    There were no fatals in this execution."
+    else
+      cat $FAILED_LOG
     fi
 
   fi
@@ -693,10 +694,19 @@ fi
 
 
 script_end_time=`date +%s`
-echo "" >> ${ACTIVITY_LOG}
-echo "TOTAL EXECUTION TIME: `expr $script_end_time - $script_start_time` s." >> ${ACTIVITY_LOG}
-
-echo "Script completed. Please review log at @ ${ACTIVITY_LOG}"
 echo ""
-# display the log
-cat ${ACTIVITY_LOG}
+echo "TOTAL EXECUTION TIME: `expr $script_end_time - $script_start_time` s."
+echo ""
+
+echo "debugging...."
+echo ""
+ps -ef | grep inotifywait
+echo ""
+ps -ef | grep /bin/bash
+echo "end debugging...."
+echo ""
+echo "Script completed."
+echo ""
+sudo killall /bin/bash
+sudo killall inotifywait
+exit 0

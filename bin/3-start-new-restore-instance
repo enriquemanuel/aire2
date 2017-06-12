@@ -1,0 +1,150 @@
+#!/bin/bash
+
+# Example command
+# bash 3-start-new-restore-instance 5764069c5b8fc dev
+
+# sourcing the tag script we will be calling for tag string
+source ../../../lib/aws-resource-tag.sh
+
+ACTION=$1
+CLIENT_ID=$2
+S3_ROOT_DIR=$3
+FEED_FILE_SET=$4 #boolean flag
+RENAME_SET=$5 #boolean flag
+S3_CURRENT_LOCATION=$6
+AWS_PROFILE=$7		# AWS Cred
+
+
+INSTANCE_RESTORE_TYPE=m4.xlarge
+LOG=/var/tmp/spin-up-ec2
+
+echo ""
+echo "Creating new instance to perform the following:"
+
+echo "Action: $ACTION"
+echo "Client ID = $CLIENT_ID"
+echo "S3_ROOT_DIR: $S3_ROOT_DIR"
+echo "FEED_FILE_SET: $FEED_FILE_SET"
+echo "RENAME_SET: $RENAME_SET"
+echo "S3_CURRENT_LOCATION: $S3_CURRENT_LOCATION"
+echo "AWS_PROFILE: $AWS_PROFILE"
+
+echo ""
+
+if [[ $# -ne 7 ]]; then
+  echo "We need 7 parameters to proceed. Exiting..."
+  echo ""
+  exit 1
+fi
+
+# Prep log dir
+rm -rf ${LOG} && mkdir ${LOG}
+
+# Check to see if an AIRE instance is online before starting a new one
+echo "Checking to see if an existing AIRE instance is already online in ${AWS_PROFILE}..."
+EXISTING_INSTANCE_CHECK=0
+EXISTING_INSTANCE_CHECK=$(aws ec2 describe-instances --filter "Name=tag:Name,Values=${CLIENT_ID}-aire" "Name=instance-state-code,Values=16" --profile ${AWS_PROFILE} | jq -r '.Reservations[].Instances[].InstanceId' | wc -l)
+if [ "${EXISTING_INSTANCE_CHECK}" -ge 1 ] ; then
+	echo "Found an existing AIRE instance(s) already running in ${AWS_PROFILE}:"
+	aws ec2 describe-instances --filter "Name=tag:Name,Values=${CLIENT_ID}-aire" "Name=instance-state-code,Values=16" --profile ${AWS_PROFILE} | jq -r '.Reservations[].Instances[].InstanceId'
+	echo ""
+	echo "We can only have 1 AIRE instance online at a time for a site.  Fix it up and re-run."
+	exit 1
+fi
+
+# Knife search to determine Learn Version and installer instance
+KNIFE_OUT_FILE=${LOG}/knife-installer-search.out
+knife search node "client_id:${CLIENT_ID} AND role:*installer" -a fqdn -a learn.version -a learn.hostname > ${KNIFE_OUT_FILE}
+
+INSTALLER_FQDN=`grep fqdn ${KNIFE_OUT_FILE} | awk '{print $2}'`
+LEARN_VERSION=`grep learn.version ${KNIFE_OUT_FILE} | awk '{print $2}'`
+LEARN_HOSTNAME=`grep learn.hostname ${KNIFE_OUT_FILE} | awk '{print $2}'`
+
+echo "Installer IP   = $INSTALLER_FQDN"
+echo "Learn Version  = $LEARN_VERSION"
+echo "Learn Hostname = $LEARN_HOSTNAME"
+
+# Need to grab the AMI info
+AMI_OUT_FILE=${LOG}/describe-ami-image.out
+#aws ec2 describe-images --filters Name=tag:clientid,Values=${CLIENT_ID} Name=tag:LearnVer,Values=${LEARN_VERSION} --profile ${AWS_PROFILE}  > ${AMI_OUT_FILE}
+aws ec2 describe-images --filters Name=tag:clientid,Values=${CLIENT_ID} --profile ${AWS_PROFILE} | jq -r '.Images|.[] |.CreationDate + " " + .ImageId + " " + .BlockDeviceMappings[].Ebs.SnapshotId' | sort -rn  | grep snap | head -1 > ${AMI_OUT_FILE}
+
+#AMI_IMAGE_ID=$(cat $AMI_OUT_FILE | jq -r '.Images[].ImageId' | head -1)
+#AMI_EBS_SNAPSHOT_ID=$(cat $AMI_OUT_FILE | jq -r '.Images[].BlockDeviceMappings[].Ebs.SnapshotId | select(.!=null)' | head -1)
+AMI_IMAGE_ID=$(cat $AMI_OUT_FILE | awk '{print $2}')
+AMI_EBS_SNAPSHOT_ID=$(cat $AMI_OUT_FILE | awk '{print $3}')
+
+if [ "${AMI_IMAGE_ID}" == "" ] ; then
+	echo "Failed to get an AMI ImageId because the available AMIs most likely dont have a version tag."
+	echo "TO FIX:  Run http://lcjenkins.bbpd.io:8080/job/lic_ami_and_asg_update/ against ${CLIENT_ID} then re-run this job."
+	exit 1
+fi
+
+echo "AMI ImageId = ${AMI_IMAGE_ID}"
+echo "AMI SnapshotId = ${AMI_EBS_SNAPSHOT_ID}"
+
+# Need to get the installer info to create a clone
+EC2_INSTALLER_INFO=${LOG}/describe-ec2-installer.out
+aws ec2 describe-instances --filters "Name=private-dns-name,Values=${INSTALLER_FQDN}" --profile ${AWS_PROFILE} | jq '.Reservations[].Instances[] | {KeyName, ImageId, InstanceType, SecurityGroups, IamInstanceProfile, SubnetId}' > ${EC2_INSTALLER_INFO}
+
+EC2_KEYNAME=`cat ${EC2_INSTALLER_INFO} | jq -r '.KeyName'`
+EC2_SUBNET_ID=`cat ${EC2_INSTALLER_INFO} | jq -r '.SubnetId'`
+EC2_IAM_PROFILE=`cat ${EC2_INSTALLER_INFO} | jq -r '.IamInstanceProfile.Arn'`
+EC2_SEC_GROUP_ID_1=`cat ${EC2_INSTALLER_INFO} | jq -r '.SecurityGroups[].GroupId' | head -1`  # We assume two sec groups -- I know, I know
+EC2_SEC_GROUP_ID_2=`cat ${EC2_INSTALLER_INFO} | jq -r '.SecurityGroups[].GroupId' | tail -1`  # We assume two sec groups -- I know, I know
+
+# Update mappings.json to use correct snap id
+sed -e "s/CHANGE-ME/$AMI_EBS_SNAPSHOT_ID/" ../template/template_mapping.json > ${LOG}/mapping.json
+
+
+NEW_INSTANCE_INFO=${LOG}/new-instance.json
+aws ec2 run-instances --image-id ${AMI_IMAGE_ID} --count 1 --instance-type ${INSTANCE_RESTORE_TYPE} \
+	--key-name ${EC2_KEYNAME} --subnet-id ${EC2_SUBNET_ID} \
+	--iam-instance-profile Arn=${EC2_IAM_PROFILE} \
+	--block-device-mappings file://${LOG}/mapping.json --associate-public-ip-address \
+	--security-group-ids ${EC2_SEC_GROUP_ID_1} --security-group-ids ${EC2_SEC_GROUP_ID_2} \
+	--profile ${AWS_PROFILE} > ${NEW_INSTANCE_INFO}
+
+# Grab the instance id and ip address of the new instance
+EC2_NEW_INSTANCE_ID=`cat ${NEW_INSTANCE_INFO} | jq -r '.Instances[].InstanceId'`
+EC2_NEW_PRIVATE_IP=`cat ${NEW_INSTANCE_INFO} | jq -r '.Instances[].PrivateIpAddress'`
+
+echo "EC2 New Instance Id = ${EC2_NEW_INSTANCE_ID}"
+echo "EC2 New Private IP = ${EC2_NEW_PRIVATE_IP}"
+
+echo "New ec2 instance will be named ${CLIENT_ID}-aire"
+echo "Tagging new instance ${EC2_NEW_INSTANCE_ID} with appropriate values"
+# concatenating AWS and Aire name tags
+RESP=$(echo "$(awstag ec2 ${AWS_PROFILE})" | sed -e "s/]/, {\"Key\":\"Name\",\"Value\":\"$CLIENT_ID-aire\"}]/g" )
+aws ec2 create-tags --resources ${EC2_NEW_INSTANCE_ID} --tags "$RESP" --profile ${AWS_PROFILE}
+
+SSH_ENV=$(host "$LEARN_HOSTNAME" | grep "has address" | tail -1 | awk -F "-" '{print $2}')
+JUMPHOST=$(bash get-jumphost "$SSH_ENV")
+
+echo ""
+echo "Waiting for the instance to be running..."
+#wait for instance is running
+aws ec2 wait instance-running --instance-ids ${EC2_NEW_INSTANCE_ID} --profile ${AWS_PROFILE}
+
+echo "Waiting on the instance to be ok..."
+# wait for instance to be ok
+aws ec2 wait instance-status-ok --instance-ids ${EC2_NEW_INSTANCE_ID} --profile ${AWS_PROFILE}
+
+# Wait for instance to come online
+sleep 30
+echo "Trying to connect to validate if its online..."
+
+CONNECTED=""
+COUNTER=0
+while [  $COUNTER -lt 10 ]; do
+  CONNECTED=$(ssh ${JUMPHOST} curl -s ${EC2_NEW_PRIVATE_IP}:22 | head -1 | awk -F- '{print $1}')
+  if [ "${CONNECTED}" == "SSH" ] ; then
+    echo "Instance is online. Yay!"
+    break
+  elif [ $COUNTER -eq 10 ] ; then
+    echo "Something is wrong.  Cannot connect to instance ${EC2_NEW_INSTANCE_ID} with IP ${EC2_NEW_PRIVATE_IP} using aws env ${JUMPHOST}. Exiting..."
+    exit 1
+  fi
+  let COUNTER=COUNTER+1
+  sleep 30
+done

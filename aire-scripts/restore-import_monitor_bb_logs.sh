@@ -39,10 +39,12 @@ inotifywait -m /usr/local/blackboard/logs/content-exchange/ -e create | while re
       if [[ ${S3_CURRENT_LOCATION: -1} == "/" ]]; then
         S3_CURRENT_LOCATION=${S3_CURRENT_LOCATION:0:-1}
       fi
-      aws s3 mv $S3_CURRENT_LOCATION/$file_to_move $S3_ROOT_DIR/completed/$file_to_move  --region $REGION --dryrun
+      aws s3 mv $S3_CURRENT_LOCATION/$file_to_move $S3_ROOT_DIR/completed/$file_to_move  --region $REGION >> $S3_ACTIVITY_LOG
+
+      rm ${WORK_LOCATION}/files/$file_to_move
 
       # display counter
-      echo "    Completed: $WORK_COUNTER_INT of $WORK_COUNTER_TOTAL"
+      echo "    Completed: $WORK_COUNTER_INT of $WORK_COUNTER_TOTAL - ${COMPLETED_COURSE}"
 
     fi
   fi

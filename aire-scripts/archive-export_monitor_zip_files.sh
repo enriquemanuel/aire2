@@ -21,6 +21,6 @@ inotifywait -m /var/tmp/cloud_learn/files/ -e create | while read path action fi
     aws s3 mv /var/tmp/cloud_learn/files/${COMPLETED_FILE} ${S3_FILES} --region $REGION >> $S3_ACTIVITY_LOG
     COUNTER=1
     WORK_COUNTER_INT=$((WORK_COUNTER_INT+1))
-    echo "    Completed: $WORK_COUNTER_INT of $WORK_COUNTER_TOTAL"
+    echo "    Completed: $WORK_COUNTER_INT of $WORK_COUNTER_TOTAL - ${COMPLETED_FILE}"
   fi
 done

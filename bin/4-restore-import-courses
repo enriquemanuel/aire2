@@ -1,0 +1,124 @@
+#!/bin/bash
+
+# This is a wrapper restore script
+
+# Example command
+# bash restore-import-courses <CLIEND_ID> <COURSE_ACTION> <AWS_PROFILE> <FORCE_DELETE_COURSE>
+# bash restore-import-courses 5764069c5b8fc restore dev 1
+
+ACTION=$1
+CLIENT_ID=$2
+S3_ROOT_DIR=$3
+FEED_FILE_SET=$4 #boolean flag
+RENAME_SET=$5 #boolean flag
+S3_CURRENT_LOCATION=$6
+AWS_PROFILE=$7		# AWS Cred
+
+echo ""
+echo "Action: $ACTION"
+echo "Client ID = $CLIENT_ID"
+echo "S3_ROOT_DIR: $S3_ROOT_DIR"
+echo "FEED_FILE_SET: $FEED_FILE_SET"
+echo "RENAME_SET: $RENAME_SET"
+echo "S3_CURRENT_LOCATION: $S3_CURRENT_LOCATION"
+echo "AWS_PROFILE: $AWS_PROFILE"
+
+echo ""
+SCRIPTS_DIR="/var/tmp/aire"   # on restore host
+DATE=`date +%Y-%m-%d_%H-%M-%S`
+
+# Determine target restore/import instance by looking for the running CLIENT_ID-aire instance
+PRIVATE_IP=""
+PRIVATE_IP=$(aws ec2 describe-instances --filter "Name=tag:Name,Values=${CLIENT_ID}-aire" "Name=instance-state-code,Values=16" --profile ${AWS_PROFILE} | jq -r '.Reservations[].Instances[].PrivateIpAddress')
+
+INSTANCE_ID=""
+INSTANCE_ID=$(aws ec2 describe-instances --filter "Name=tag:Name,Values=${CLIENT_ID}-aire" "Name=instance-state-code,Values=16" --profile ${AWS_PROFILE} | jq -r '.Reservations[].Instances[].InstanceId')
+
+
+if [ "${PRIVATE_IP}" != "" ] ; then
+	echo ""
+	echo "${CLIENT_ID}-aire IP = ${PRIVATE_IP}"
+else
+	echo "Whoops! Couldnt find a target AIRE instance for ${CLIENT_ID}-aire"
+	exit 1
+fi
+
+# Knife search to determine hostname
+SITE_HOSTNAME=$(knife search node "client_id:${CLIENT_ID} AND role:*installer" -a learn.hostname | grep learn.hostname | awk '{print $2}')
+
+# Since we are ssh'ing, we need the fleet id (this really needs to get switched over to captain for this data)
+JUMPHOST=$AWS_PROFILE
+
+echo "Site hostname = ${SITE_HOSTNAME}"
+echo "Client ID = ${CLIENT_ID}"
+echo "Jumphost = ${JUMPHOST}"
+echo ""
+
+
+# Prep and copy AIRE files onto target restore/import instance
+echo "Creating dirs ${SCRIPTS_DIR} on ${PRIVATE_IP}..."
+ssh ${JUMPHOST}+${PRIVATE_IP} "sudo rm -rf ${SCRIPTS_DIR}"
+ssh ${JUMPHOST}+${PRIVATE_IP} "mkdir ${SCRIPTS_DIR}"
+
+echo "Copy restore/import scripts to ${PRIVATE_IP}..."
+scp -r ../aire-scripts/* ${JUMPHOST}+${PRIVATE_IP}:${SCRIPTS_DIR}
+
+echo "Setting perms on remote files and dirs..."
+ssh ${JUMPHOST}+${PRIVATE_IP} "sudo chown -R bbuser: ${SCRIPTS_DIR} && sudo chmod -R 777 ${SCRIPTS_DIR}"
+
+
+
+if [[ ${S3_CURRENT_LOCATION: -1} == "/" ]]; then
+	S3_CURRENT_LOCATION=${S3_CURRENT_LOCATION:0:-1}
+fi
+if [[ ${S3_ROOT_DIR: -1} == "/" ]]; then
+	S3_ROOT_DIR=${S3_ROOT_DIR:0:-1}
+fi
+
+echo ""
+ssh ${JUMPHOST}+${PRIVATE_IP} "sudo ${SCRIPTS_DIR}/modify-volume.sh ${ACTION} ${S3_CURRENT_LOCATION}"
+
+if [[ $? -ne 0 ]]; then
+	exit 1
+  echo "Something went wrong modifying the volume. Exiting..."
+  echo ""
+fi
+
+echo ""
+echo "Restarting the instance for the volume to take effect.."
+# stop and wait for it to be stopped
+
+aws ec2 stop-instances --instance-ids  ${INSTANCE_ID} --profile ${AWS_PROFILE}
+aws ec2 wait instance-stopped --instance-ids  ${INSTANCE_ID} --profile ${AWS_PROFILE}
+
+# start it and wait for it to be started
+aws ec2 start-instances --instance-ids  ${INSTANCE_ID} --profile ${AWS_PROFILE}
+aws ec2 wait instance-running --instance-ids ${INSTANCE_ID} --profile ${AWS_PROFILE}
+aws ec2 wait instance-status-ok --instance-ids ${INSTANCE_ID} --profile ${AWS_PROFILE}
+
+echo "Restart completed..."
+echo ""
+
+
+# remote execute it in the background
+if [[ "$ACTION" == "archive" || "$ACTION" == "export" ]]; then
+	S3_CURRENT_LOCATION="none"
+	FEED_FILE_SET="yes"
+	RENAME_SET="no"
+	ssh ${JUMPHOST}+${PRIVATE_IP} "sudo ${SCRIPTS_DIR}/aire_process.sh ${ACTION} ${CLIENT_ID} ${S3_ROOT_DIR} ${FEED_FILE_SET} ${RENAME_SET} ${S3_CURRENT_LOCATION} ${AWS_PROFILE}"
+
+elif [[ "$ACTION" == "import" || "$ACTION" == "restore" ]]; then
+	ssh ${JUMPHOST}+${PRIVATE_IP} "sudo ${SCRIPTS_DIR}/aire_process.sh ${ACTION} ${CLIENT_ID} ${S3_ROOT_DIR} ${FEED_FILE_SET} ${RENAME_SET} ${S3_CURRENT_LOCATION} ${AWS_PROFILE}"
+
+fi
+
+
+
+# now lets delete the aire instance
+if [[ $? -ne 0 ]]; then
+	exit 1
+else
+	exit 0
+fi
+# Finished
+echo ""

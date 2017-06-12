@@ -1,0 +1,31 @@
+#!/bin/bash
+
+# Example command
+# bash 6-terminate-restore-instance 5764069c5b8fc dev
+
+CLIENT_ID=$1
+AWS_PROFILE=$2
+
+echo ""
+echo "Client ID = $CLIENT_ID"
+
+# Check to see if the AIRE instance exists before trying to terminate it
+echo "Checking to see if there is an existing AIRE instance in ${AWS_PROFILE}..."
+AIRE_NODES=()
+for x in $(aws ec2 describe-instances --filter "Name=tag:Name,Values=${CLIENT_ID}-aire*" "Name=instance-state-code,Values=16,80" --profile ${AWS_PROFILE} | jq -r '.Reservations[].Instances[].InstanceId')
+do
+	AIRE_NODES+=($x)
+done
+echo "Found ${#AIRE_NODES[@]} AIRE nodes."
+if [ "${#AIRE_NODES[@]}" -ge 1 ]; then
+	echo "Terminating all AIRE nodes for client: ${CLIENT_ID}"
+	for i in "${AIRE_NODES[@]}"
+	do
+		 termed_instance=$(aws ec2 terminate-instances --instance-ids ${i} --profile ${AWS_PROFILE} | jq -r '.TerminatingInstances[].InstanceId')
+		 echo "Terminated instance: ${termed_instance}"
+	done
+	exit 0
+else
+	echo "Nothing to do. Exiting..."
+	exit 1
+fi

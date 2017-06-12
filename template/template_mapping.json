@@ -1,0 +1,11 @@
+[
+  {
+    "DeviceName": "/dev/sda1",
+    "Ebs": {
+      "DeleteOnTermination": true,
+      "SnapshotId": "CHANGE-ME",
+      "VolumeSize": 100,
+      "VolumeType": "gp2"
+    }
+  }
+]
